@@ -12,6 +12,8 @@ out/
 *.pt
 *.rasa
 .rasa
+rasa-venv
+*/rasa-venv
 /venv
 # Secrets
 .env
