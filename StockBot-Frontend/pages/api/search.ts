@@ -7,7 +7,7 @@ export default async function handler(
 ) {
   try {
     const query = req.query.q;
-    const response = await axios.get(`http://127.0.0.1:5000/search?q=${query}`);
+    const response = await axios.get(`http://34.66.22.225:5000/search?q=${query}`);//TODO:check
     res.status(200).json(response.data);
   } catch (error) {
     console.error('Error proxying request:', error);

@@ -944,7 +944,7 @@ import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { nanoid } from 'nanoid';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/session';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://34.66.22.225:5000/api/session';
 
 // --- Interfaces ---
 interface CompanyMatch {

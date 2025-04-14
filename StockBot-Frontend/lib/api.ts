@@ -3,7 +3,7 @@
 import axios from 'axios';
 
 // Define the base URL for the API
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://34.66.22.225:5000';//TODO:check
 
 // --- Interfaces ---
 export interface Company {

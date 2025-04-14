@@ -13,7 +13,7 @@ out/
 *.rasa
 .rasa
 rasa-venv
-*/rasa-venv
+**/rasa-venv
 /venv
 # Secrets
 .env
