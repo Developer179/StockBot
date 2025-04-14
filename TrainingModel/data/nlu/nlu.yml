@@ -1,0 +1,178 @@
+version: "3.1"
+
+nlu:
+- intent: greet
+  examples: |
+    - hi
+    - hello
+    - hey there
+    - good morning
+    - good afternoon
+    - yo
+    - howdy
+    - start
+
+- intent: goodbye
+  examples: |
+    - bye
+    - goodbye
+    - see you later
+    - exit
+    - quit
+    - talk to you later
+    - end chat
+    - finished
+
+- intent: ask_data_source
+  examples: |
+    # --- Generic Questions (No Company) ---
+    - where does [company name](data_concept) come from?
+    - source for [isin code](data_concept)?
+    - which table has [market cap](data_concept)?
+    - tell me the [p/e ratio](data_concept) source
+    - where is [isin](data_concept)?
+    - where do you get [open interest](data_concept)?
+    - origin of [high dividend stocks](data_concept)?
+    - which dataset is [top gaining futures](data_concept) in?
+    - where can I find [nifty 50](data_concept)?
+    - database for [long term stocks](data_concept)?
+    - how do you know [market capitalization](data_concept)?
+    - which source provides [eps](data_concept)?
+    - data source for [oi](data_concept)?
+    - source of [sector](data_concept)?
+    - where are [FUTURES_TOP_PRICE_GAINERS](data_concept) listed?
+    - origin of [company sector](data_concept)?
+    - source of [nse close price](data_concept)?
+    - backend for [mcap](data_concept)?
+    - how do you find [nse last price](data_concept)?
+    - table for [scrip_name](data_concept)?
+    - where is [earnings per share](data_concept) stored?
+    - [LONG_TERM_VERDICT_BUY](data_concept) group?
+    - where store [nse_todays_high](data_concept)?
+    - dataset for [NIFTY50](data_concept)?
+    - source for [open interest](data_concept)?
+    - table name for [strike_price](data_concept)?
+    - source of [face value](data_concept)?
+    - is [price to earnings](data_concept) from equity data?
+    - track [golden crossover](data_concept)? where?
+    - tell me about [volume shockers](data_concept) category
+    - how fetch [bse_symbol](data_concept)?
+    - where does [bse last closed price](data_concept) data come from?
+    - source for [nse todays low](data_concept)?
+    - tell me the origin of [pb ratio](data_concept)
+    - where is [short term verdict](data_concept) data?
+    - source for [bse upper limit](data_concept)
+    - [industry](data_concept) source info?
+    - where can i find the [nse lower limit](data_concept)?
+    - data source for [instrument name](data_concept)
+
+    # --- Questions WITH Company Name (Crucial for Robustness) ---
+    # Strike Price
+    - what is the [strike price](data_concept) of [tata motors](company_name)?
+    - tell me the [strike price](data_concept) for [reliance industries](company_name)
+    - [infosys](company_name) [strike price](data_concept) source?
+    - for [hdfc bank](company_name) where does the [strike price](data_concept) come from
+
+    # Market Cap / PE Ratio / EPS / Face Value / PB Ratio (Equity)
+    - what table has the [market cap](data_concept) for [Infosys](company_name)?
+    - source of [market capitalization](data_concept) for [Reliance Industries](company_name)?
+    - where does the [mcap](data_concept) data for [Tata Motors](company_name) come from?
+    - tell me the source of [eps](data_concept) for [HDFC Bank](company_name)
+    - [ITC Limited](company_name)'s [earnings per share](data_concept) source?
+    - for [Wipro](company_name), where is [eps](data_concept) stored?
+    - source for the [pe ratio](data_concept) of [State Bank of India](company_name)?
+    - what's the [p/e ratio](data_concept) source for [ICICI Bank](company_name)?
+    - [Axis Bank](company_name) [price to earnings](data_concept) source info?
+    - origin of [face value](data_concept) for [Larsen & Toubro](company_name)?
+    - where can i find the [face value](data_concept) for [Bharti Airtel](company_name)?
+    - [Hindustan Unilever](company_name) [pb ratio](data_concept) data source?
+    - tell me the [price to book](data_concept) source for [maruti suzuki](company_name)
+
+    # NSE/BSE Prices & Limits (Additional Details)
+    - source of [nse high today](data_concept) for [Reliance Industries](company_name)?
+    - [Infosys](company_name) [nse todays high](data_concept) origin?
+    - where can I find [nse last closed price](data_concept) for [tata motors](company_name)?
+    - tell me about [nse ltp](data_concept) source for [hdfc bank](company_name)
+    - source for [bse todays low](data_concept) for [itc limited](company_name)?
+    - [wipro](company_name)'s [bse last closed price](data_concept) source?
+    - where is the [nse upper limit](data_concept) for [State Bank of India](company_name)?
+    - source for [bse lower limit](data_concept) of [ICICI Bank](company_name)
+
+    # Open Interest / Verdicts (Additional Details)
+    - where does the [oi](data_concept) data for [Tata Motors](company_name) come from?
+    - [open interest](data_concept) source for [reliance](company_name)?
+    - for [infosys](company_name), where is the [oi data](data_concept)?
+    - tell me the source for [long term verdict](data_concept) for [hdfc bank](company_name)
+    - [itc limited](company_name)'s [short term view](data_concept) source?
+
+    # ISIN / Sector / Industry / Symbol (Master)
+    - [isin](data_concept) source for [ITC Limited](company_name)?
+    - origin of [sector](data_concept) for [Wipro](company_name)
+    - what's the [industry](data_concept) source for [axis bank](company_name)?
+    - tell me the [symbol](data_concept) source for [reliance industries](company_name)
+    - where is the [bse symbol](data_concept) for [infosys](company_name) stored?
+
+    # --- Mixed Structure Examples ---
+    - for [reliance](company_name), where is the [market cap](data_concept) stored?
+    - [nse todays high](data_concept) source for [infosys](company_name)?
+    - tell me for [tata motors](company_name), the source of [open interest](data_concept)
+    - regarding [hdfc bank](company_name), what's the [pe ratio](data_concept) source?
+    - [sector](data_concept) data for [itc](company_name), where from?
+    - [bse symbol](data_concept) source, for [wipro](company_name)?
+
+- intent: ask_investment_advice
+  examples: |
+    - what should I do with [tata motors](company_name)?
+    - what to do with [Infosys](company_name) stock?
+    - advice for [Reliance Industries](company_name)?
+    - is [HDFC Bank](company_name) a buy or sell?
+    - buy sell hold [ITC Limited](company_name)?
+    - recommendation for [Wipro](company_name)
+    - invest in [State Bank of India](company_name)?
+    - tell me what to do about [ICICI Bank](company_name)
+    - outlook for [Axis Bank](company_name)
+    - should i invest in [Larsen & Toubro](company_name)
+    - short term plan for [Bharti Airtel](company_name)?
+    - long term view for [Hindustan Unilever](company_name)?
+    - investment advice on [Maruti Suzuki](company_name)
+    
+    # Direct "What to do"
+    - what should I do with [tata motors](company_name)?
+    - what to do with [Infosys](company_name) stock?
+    - tell me what to do about [ICICI Bank](company_name)
+    - what is the plan for [reliance industries](company_name)?
+    - what actions to take for [wipro](company_name)?
+    - how should i proceed with [axis bank](company_name)?
+    # Using "Advice"
+    - advice for [Reliance Industries](company_name)?
+    - give me investment advice for [hdfc bank](company_name)
+    - investment advice on [Maruti Suzuki](company_name)
+    - seeking advice about [state bank of india](company_name)
+    - need advice regarding [itc limited](company_name)
+    # Using "Buy/Sell/Hold"
+    - is [HDFC Bank](company_name) a buy or sell?
+    - buy sell hold [ITC Limited](company_name)?
+    - should i buy [reliance industries](company_name) now?
+    - is it time to sell [infosys](company_name)?
+    - hold [wipro](company_name)?
+    # Using "Recommendation/Outlook/View"
+    - recommendation for [Wipro](company_name)
+    - outlook for [Axis Bank](company_name)
+    - short term plan for [Bharti Airtel](company_name)?
+    - long term view for [Hindustan Unilever](company_name)?
+    - what's the investment outlook for [tata motors](company_name)?
+    - give me the view on [icici bank](company_name)
+    # Using "Invest"
+    - invest in [State Bank of India](company_name)?
+    - should i invest in [Larsen & Toubro](company_name)?
+    - is [reliance](company_name) a good investment?
+    - thinking of investing in [infosys](company_name), thoughts?
+    # Different Structures
+    - for [Maruti Suzuki](company_name), what is the advice?
+    - [tata motors](company_name), what's the outlook?
+    - regarding [hdfc bank](company_name), what should one do?
+    - [infosys](company_name), buy or sell?
+    # More variations
+    - what's your call on [reliance industries](company_name)?
+    - tell me the verdict for [wipro](company_name)
+    - [axis bank](company_name) - what's the strategy?

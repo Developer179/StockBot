@@ -1,0 +1,43 @@
+# domain.yml
+version: "3.1"
+
+intents:
+  - greet
+  - goodbye
+  - ask_data_source
+  - ask_investment_advice
+
+entities:
+  - data_concept
+  - company_name
+
+actions:
+  - action_get_data_source
+  - action_get_investment_advice
+
+responses:
+  utter_greet:
+  - text: "Hello! Ask me about the source category for a data point (like 'market cap', 'nse high'), a screener (like 'top gainers'), or a company's data source."
+  utter_goodbye:
+  - text: "Goodbye!"
+  utter_ask_what_data:
+  - text: "Which data point, screener, or concept are you asking about? For example, 'pe ratio', 'sector', 'open interest', or 'volume shockers'."
+  - text: "Could you please specify the stock detail or screener you're interested in?"
+  utter_not_found:
+  # Use the variable passed from the action for better feedback
+  - text: "Sorry, I couldn't determine the source category for '{data_concept}'."
+  - text: "Hmm, I don't have information about the source for '{data_concept}'."
+  utter_default: # Fallback response
+  - text: "Sorry, I didn't quite understand. Please mention a specific data point like 'market cap', 'nse high', 'isin', or a screener like 'top gainers', 'nifty 50'."
+  - text: "I can tell you the source category for financial data points. Could you rephrase your request?"
+  utter_ask_for_company:
+    - text: "Which company are you asking about?"
+  utter_fetching_advice:
+    - text: "Okay, let me look up the short-term and long-term outlook for {company}."
+    - text: "Checking the investment verdicts for {company}..."
+  utter_company_not_found_for_advice:
+    - text: "Sorry, I couldn't find {company} in my records to check the outlook."
+
+session_config:
+  session_expiration_time: 60
+  carry_over_slots_to_new_session: true

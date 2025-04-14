@@ -1,0 +1,28 @@
+# data/rules.yml
+version: "3.1"
+
+rules:
+- rule: Respond to greet
+  steps:
+  - intent: greet
+  - action: utter_greet
+
+- rule: Respond to goodbye
+  steps:
+  - intent: goodbye
+  - action: utter_goodbye
+
+- rule: Ask for data source when intent is triggered
+  steps:
+  - intent: ask_data_source
+  - action: action_get_data_source # Trigger our custom action
+
+- rule: Handle investment advice request
+  steps:
+    - intent: ask_investment_advice # If the user asks for advice...
+    - action: action_get_investment_advice # ...run this specific action
+
+- rule: Respond to simple data source questions # Example rule for the other action
+  steps:
+    - intent: ask_data_source
+    - action: action_get_data_source

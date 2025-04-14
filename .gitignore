@@ -1,0 +1,20 @@
+# Node
+**/node_modules/
+.next/
+out/
+
+# Python
+**/__pycache__/
+**/.venv/
+**/venv/
+*.pyc
+*.pkl
+*.pt
+*.rasa
+.rasa
+/venv
+# Secrets
+.env
+
+# System
+.DS_Store

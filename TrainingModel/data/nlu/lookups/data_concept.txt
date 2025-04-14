@@ -1,0 +1,87 @@
+# --- Canonical IDs (Essential for RegexFeaturizer) ---
+comp_name
+scrip_name
+symbol
+bse_symbol
+mcx_symbol
+lot_size
+isin
+industry
+sector
+strike_price
+nse_lower_limit
+nse_upper_limit
+bse_lower_limit
+bse_upper_limit
+segment
+instrument_name
+nse_todays_low
+nse_todays_high
+nse_todays_open
+nse_last_closed_price
+bse_todays_low
+bse_todays_high
+bse_todays_open
+bse_last_closed_price
+oi
+short_term_verdict
+long_term_verdict
+market_capital
+pe_ratio
+bool_value
+pb_ratio
+face_value
+eps
+type
+FUTURES_TOP_PRICE_GAINERS
+NIFTY50
+LONG_TERM_VERDICT_BUY
+VOLUME_SHOCKERS
+HIGH_DIVIDEND_STOCKS
+GOLDEN_CROSSOVER
+
+# --- Common Multi-Word User Phrasings (Helps RegexEntityExtractor & RegexFeaturizer) ---
+company name
+scrip name
+bse symbol
+mcx symbol
+lot size
+isin code
+strike price
+nse lower limit
+nse upper limit
+bse lower limit
+bse upper limit
+instrument name
+nse todays low
+nse todays high
+nse todays open
+nse last closed price
+bse todays low
+bse todays high
+bse todays open
+bse last closed price
+open interest
+short term verdict
+long term verdict
+long term investment
+what to do with
+market capital
+market cap
+market capitalization
+pe ratio
+p/e ratio
+price to earnings
+pb ratio
+price to book
+face value
+earnings per share
+futures top price gainers
+top gaining futures
+nifty 50
+long term stocks
+volume shockers
+unusual volume
+high dividend stocks
+golden crossover
+# Add any other common ways users refer to these concepts

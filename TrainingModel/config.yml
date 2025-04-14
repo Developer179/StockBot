@@ -1,0 +1,36 @@
+# config.yml
+language: en
+
+pipeline:
+- name: WhitespaceTokenizer
+- name: RegexFeaturizer   # Uses lookup tables
+- name: LexicalSyntacticFeaturizer
+- name: CountVectorsFeaturizer
+- name: CountVectorsFeaturizer
+  analyzer: char_wb
+  min_ngram: 1
+  max_ngram: 4
+- name: DIETClassifier
+  epochs: 100   # Consider increasing slightly (e.g., 120-150) if dataset is much larger, but test default first
+  constrain_similarities: true
+- name: RegexEntityExtractor
+  case_sensitive: false
+  use_lookup_tables: true   # Essential for using the lookup file
+  use_regexes: false   # Assuming you don't have custom regex patterns in nlu.yml
+- name: EntitySynonymMapper   # Essential for mapping to canonical values
+- name: FallbackClassifier
+  threshold: 0.4   # Adjust based on testing
+  ambiguity_threshold: 0.1
+
+policies:
+- name: MemoizationPolicy
+- name: RulePolicy
+#   - name: UnexpecTEDIntentPolicy
+#     max_history: 5
+#     epochs: 100
+#   - name: TEDPolicy
+#     max_history: 5
+#     epochs: 100
+#     constrain_similarities: true
+
+assistant_id: 20250410-124338-odious-soul # Your assistant ID here

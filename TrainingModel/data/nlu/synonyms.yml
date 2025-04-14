@@ -1,0 +1,247 @@
+version: "3.1"
+nlu:
+# --- Company Master ---
+- synonym: comp_name
+  examples: |
+    - company name
+    - name of company
+    - stock name
+    - company's name
+- synonym: scrip_name
+  examples: |
+    - stock short name
+    - scrip name
+    - script name
+- synonym: symbol
+  examples: |
+    - stock symbol
+    - ticker symbol
+    - symbol
+    - ticker
+- synonym: bse_symbol
+  examples: |
+    - bse symbol
+    - bse code
+    - bombay stock exchange symbol
+- synonym: mcx_symbol
+  examples: |
+    - mcx symbol
+    - mcx code
+    - commodity exchange symbol
+- synonym: lot_size
+  examples: |
+    - lot size
+    - contract size
+    - futures lot size
+    - option lot size
+- synonym: isin
+  examples: |
+    - isin code
+    - security id
+    - isin number
+    - international securities identification number
+- synonym: industry
+  examples: |
+    - industry
+    - business industry
+    - company's industry
+- synonym: sector
+  examples: |
+    - company sector
+    - business sector
+    - sector
+- synonym: strike_price
+  examples: |
+    - strike price
+    - st
+    - strike value
+    - option strike
+- synonym: nse_lower_limit
+  examples: |
+    - nse lower limit
+    - nse lower circuit
+    - nse lower band
+- synonym: nse_upper_limit
+  examples: |
+    - nse upper limit
+    - nse upper circuit
+    - nse upper band
+- synonym: bse_lower_limit
+  examples: |
+    - bse lower limit
+    - bse lower circuit
+    - bse lower band
+- synonym: bse_upper_limit
+  examples: |
+    - bse upper limit
+    - bse upper circuit
+    - bse upper band
+- synonym: segment
+  examples: |
+    - segment
+    - market segment
+    - trading segment
+- synonym: instrument_name
+  examples: |
+    - instrument name
+    - instrument type
+    - security type
+
+# --- Company Additional Details ---
+- synonym: nse_todays_low
+  examples: |
+    - nse todays low
+    - nse low today
+    - nse day low
+    - today's nse low price
+    - nse daily low
+- synonym: nse_todays_high
+  examples: |
+    - nse high today
+    - today's nse high price
+    - nse day high
+    - nse todays high
+    - nse daily high
+- synonym: nse_todays_open
+  examples: |
+    - nse open today
+    - nse todays open
+    - nse opening price
+    - today's nse open
+    - nse daily open
+- synonym: nse_last_closed_price
+  examples: |
+    - nse close price
+    - nse closing price
+    - nse ltp
+    - nse last price
+    - nse last closed price
+    - nse previous close
+- synonym: bse_todays_low
+  examples: |
+    - bse todays low
+    - bse low today
+    - bse day low
+    - today's bse low price
+    - bse daily low
+- synonym: bse_todays_high
+  examples: |
+    - bse high today
+    - today's bse high price
+    - bse day high
+    - bse todays high
+    - bse daily high
+- synonym: bse_todays_open
+  examples: |
+    - bse open today
+    - bse todays open
+    - bse opening price
+    - today's bse open
+    - bse daily open
+- synonym: bse_last_closed_price
+  examples: |
+    - bse close price
+    - bse closing price
+    - bse ltp
+    - bse last price
+    - bse last closed price
+    - bse previous close
+- synonym: oi
+  examples: |
+    - open interest
+    - oi data
+    - current oi
+- synonym: short_term_verdict
+  examples: |
+    - short term verdict
+    - short term view
+    - short term outlook
+    - short term investment view
+    - short term call
+    - what to do with
+- synonym: long_term_verdict
+  examples: |
+    - long term verdict
+    - long term view
+    - long term investment view
+    - long term outlook
+    - long term call
+    - what to do with
+
+# --- Consolidated Company Equity ---
+- synonym: market_capital
+  examples: |
+    - market cap
+    - mcap
+    - market capitalization
+    - company valuation
+- synonym: pe_ratio
+  examples: |
+    - p/e ratio
+    - price to earnings
+    - pe ratio
+    - price earnings ratio
+    - p/e
+- synonym: bool_value # Be specific if possible, e.g., 'is_dividend_eligible'
+  examples: |
+    - bool value
+    # - (add specific meanings if known)
+- synonym: pb_ratio
+  examples: |
+    - p/b ratio
+    - price to book ratio
+    - price to book
+    - pb ratio
+    - p/b
+- synonym: face_value
+  examples: |
+    - face value
+    - nominal value
+    - par value
+- synonym: eps
+  examples: |
+    - earnings per share
+    - eps value
+- synonym: type # Be specific if possible, e.g., 'equity_type'
+  examples: |
+    - type
+    - category type
+    # - (add specific meanings if known)
+
+# --- Screeners ---
+- synonym: FUTURES_TOP_PRICE_GAINERS
+  examples: |
+    - top gaining futures
+    - futures price gainers
+    - futures top gainers
+    - best performing futures
+- synonym: NIFTY50
+  examples: |
+    - nifty 50 index
+    - nifty fifty
+    - nifty 50 stocks
+- synonym: LONG_TERM_VERDICT_BUY # Maps a general concept to a specific screener category
+  examples: |
+    - long term stocks
+    - good stocks for long term
+    - long term buys
+    - long term buy recommendations
+- synonym: VOLUME_SHOCKERS
+  examples: |
+    - volume shockers
+    - unusual volume stocks
+    - high volume activity
+    - sudden volume increase
+    - volume spurt
+- synonym: HIGH_DIVIDEND_STOCKS
+  examples: |
+    - high dividend stocks
+    - stocks paying high dividends
+    - top dividend payers
+    - dividend yield stocks
+- synonym: GOLDEN_CROSSOVER
+  examples: |
+    - golden crossover
+    - 50 200 crossover
+    - moving average crossover
+    - golden cross stocks
