@@ -830,7 +830,7 @@ def generate_direct_answer(question: str, company_data: Dict[str, Any], company_
 
 
 @log_call(logging.DEBUG)
-def get_rasa_response_payload(question: str, rasa_url: str = "http://34.66.22.225:5005") -> Optional[Dict[str, Any]]: #TODO:check
+def get_rasa_response_payload(question: str, rasa_url: str = "http://localhost:5005") -> Optional[Dict[str, Any]]: #TODO:check
     """Sends question to Rasa REST webhook, returns 'custom' JSON payload."""
     if not rasa_url:
         logger.error("Rasa URL is not configured. Cannot call Rasa.")
@@ -1286,7 +1286,8 @@ def smart_ask():
 
     # --- Rasa Interaction ---
     rasa_payload = None
-    rasa_url = os.getenv("RASA_WEBHOOK_URL", "http://34.66.22.225:5005") #TODO:check Get Rasa URL from env
+    rasa_url = os.getenv("RASA_WEBHOOK_URL", "http://localhost:5005") #TODO:check Get Rasa URL from env
+
 
     # Call Rasa unless we just resolved ambiguity and lack the original question somehow
     if (is_ambiguity_resolved and original_question) or (not is_ambiguity_resolved and original_question):
