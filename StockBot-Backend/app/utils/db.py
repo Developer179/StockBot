@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 # Consider replacing with environment variables for security
 DB_NAME = "univest"
 DB_USER = "postgres"
-DB_PASSWORD = "P-YJcgUyprDVmUg"
-DB_HOST = "10.41.192.3"
+DB_PASSWORD = "univest@123"
+DB_HOST = "localhost"
 DB_PORT = "5432"
 
 def get_db_connection():
