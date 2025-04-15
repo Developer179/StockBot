@@ -7,7 +7,6 @@ import os
 
 # --- Logging Setup ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-os.makedirs(LOG_DIR, exist_ok=True)
 
  
 logger = logging.getLogger(__name__)
