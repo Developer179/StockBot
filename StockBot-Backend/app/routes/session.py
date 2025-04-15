@@ -243,8 +243,7 @@ def build_company_name_index() -> None:
             SELECT fin_code, comp_name, symbol
             FROM company_master
             WHERE comp_name IS NOT NULL AND symbol IS NOT NULL AND fin_code IS NOT NULL
-            ORDER BY fin_code
-            LIMIT 10 -- Order for consistency if needed
+            ORDER BY fin_code -- Order for consistency if needed
             """
         )
         rows = cur.fetchall()
@@ -255,7 +254,11 @@ def build_company_name_index() -> None:
             logger.error("Embedding model not loaded, cannot build company index.")
             return
 
-        for row in rows:
+        for idx, row in rows:
+            if idx % 100 == 0 or idx == len(rows):  # Log every 100 rows or at the end
+                percent_done = (idx / len(rows)) * 100
+                logger.info("Processed %d/%d companies (%.1f%%)", idx, len(rows), percent_done)
+                
             # Access by key if DictCursor, otherwise by index
             fin_code = row["fin_code"] if is_dict_cursor else row[0]
             name = row["comp_name"] if is_dict_cursor else row[1]
@@ -291,6 +294,7 @@ def build_company_name_index() -> None:
         COMPANY_EMBEDDING_MATRIX = None
         COMPANY_NAME_INDEX = []
     finally:
+        logger.info("Build company name index excepted")
         if conn:
             conn.close()
 
