@@ -210,13 +210,14 @@ def _initialize_embedding_model() -> None:
         logger.exception("Failed to load SentenceTransformer: %s", exc)
         raise # Fail fast if model loading fails
 
+# (Inside your routes.py or wherever build_company_name_index is defined)
 @log_call()
 def build_company_name_index() -> None:
     """Populate COMPANY_NAME_INDEX & COMPANY_EMBEDDING_MATRIX from DB."""
     global COMPANY_NAME_INDEX, COMPANY_EMBEDDING_MATRIX
 
     # Check if already built (and model loaded)
-    _initialize_embedding_model() # Ensure model is loaded
+    _initialize_embedding_model() # Ensure model is loaded attempt happens first
     if COMPANY_NAME_INDEX and COMPANY_EMBEDDING_MATRIX is not None and embedding_model:
         logger.debug("Company index already cached (size=%d)", len(COMPANY_NAME_INDEX))
         return
@@ -241,13 +242,13 @@ def build_company_name_index() -> None:
         cur = None
         is_dict_cursor = False
         if psycopg2_extras:
-             try:
-                 cur = conn.cursor(cursor_factory=psycopg2_extras.DictCursor)
-                 is_dict_cursor = True
-                 logger.debug("Using DictCursor for company index build.")
-             except Exception as e:
-                 logger.warning(f"Failed to create DictCursor, falling back to standard cursor: {e}")
-                 cur = conn.cursor()
+            try:
+                cur = conn.cursor(cursor_factory=psycopg2_extras.DictCursor)
+                is_dict_cursor = True
+                logger.debug("Using DictCursor for company index build.")
+            except Exception as e:
+                logger.warning(f"Failed to create DictCursor, falling back to standard cursor: {e}")
+                cur = conn.cursor()
         else:
             cur = conn.cursor()
             logger.debug("Using standard cursor for company index build.")
@@ -264,14 +265,14 @@ def build_company_name_index() -> None:
         rows = cur.fetchall()
         total_rows = len(rows) # Get total count for logging
         cur.close() # Close cursor promptly
-        logger.info("Fetched %d companies for embedding index", total_rows)
+        logger.info("Fetched %d companies for embedding index build.", total_rows)
 
         if not embedding_model:
             # Double check model wasn't unloaded somehow
             logger.error("Embedding model became unavailable during index build.")
             return
 
-        # --- *** CORRECTED LOOP *** ---
+        # --- Encoding Loop ---
         start_build_time = time.time()
         for idx, row in enumerate(rows):
             # Log progress periodically
@@ -309,7 +310,7 @@ def build_company_name_index() -> None:
                 logger.exception(f"Encoding or processing failed for {row_identifier}. Error: {inner_exc}. Row data (partial): {str(row)[:100]}")
                 # Optionally: continue? Or break if too many errors? For now, continue.
 
-        # --- *** END CORRECTED LOOP *** ---
+        # --- End Encoding Loop ---
 
         if embeddings and index:
             # Stack tensors only if embeddings were generated
@@ -338,7 +339,6 @@ def build_company_name_index() -> None:
         if conn:
             conn.close()
             logger.debug("Database connection closed after company index build.")
-            
             
 @log_call()
 def build_screener_index() -> None:
