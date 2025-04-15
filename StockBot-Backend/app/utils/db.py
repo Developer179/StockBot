@@ -10,9 +10,9 @@ logger = logging.getLogger(__name__)
 # Database connection parameters
 # In a real application, these should be in a config file or environment variables
 DB_NAME = "univest"
-DB_USER = "apple"
-DB_PASSWORD = "univest123"
-DB_HOST = "localhost"
+DB_USER = "postgres"
+DB_PASSWORD = "P-YJcgUyprDVmUg"
+DB_HOST = "10.41.192.3"
 DB_PORT = "5432"
 
 def get_db_connection():
