@@ -938,6 +938,7 @@
 // src/components/ChatInterface.tsx (or appropriate path)
 
 
+
 'use client';
 
 import { useState, useEffect, useRef } from 'react';

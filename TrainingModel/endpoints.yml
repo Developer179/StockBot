@@ -1,4 +1,4 @@
 # endpoints.yml
 # Action server endpoint configuration
 action_endpoint:
- url: "http://localhost:5055/webhook" # Default URL for local action server
+ url: "http://34.66.22.225:5055/webhook" # Default URL for local action server
