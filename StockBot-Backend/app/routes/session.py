@@ -358,7 +358,7 @@ def build_screener_index() -> None:
 @log_call(logging.DEBUG)
 def find_company_by_name_or_symbol(query: str) -> Optional[Dict[str, Any]]:
     """Finds best company match using embeddings and fuzzy matching."""
-    build_company_name_index() # Ensure index is built
+    # build_company_name_index() # Ensure index is built
     if not COMPANY_NAME_INDEX or COMPANY_EMBEDDING_MATRIX is None or not embedding_model:
         logger.error("Company index or embedding model not available for matching.")
         return None
@@ -1239,7 +1239,7 @@ def smart_ask():
         if context_data and (time.time() - context_data.get('timestamp', 0) <= AMBIGUITY_CACHE_EXPIRY):
             original_question = context_data['question'] # Use original question from stored context
             logger.info(f"Found ambiguity context. Original Question: '{original_question}'")
-            build_company_name_index() # Ensure index is ready
+            # build_company_name_index() # Ensure index is ready
             # Find the selected company details from index
             company_match_resolved = next((c for c in COMPANY_NAME_INDEX if str(c.get("fin_code")) == str(selected_fin_code)), None)
 
