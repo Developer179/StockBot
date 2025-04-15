@@ -215,29 +215,44 @@ def build_company_name_index() -> None:
     """Populate COMPANY_NAME_INDEX & COMPANY_EMBEDDING_MATRIX from DB."""
     global COMPANY_NAME_INDEX, COMPANY_EMBEDDING_MATRIX
 
+    # Check if already built (and model loaded)
     _initialize_embedding_model() # Ensure model is loaded
-    if COMPANY_NAME_INDEX and COMPANY_EMBEDDING_MATRIX is not None:
+    if COMPANY_NAME_INDEX and COMPANY_EMBEDDING_MATRIX is not None and embedding_model:
         logger.debug("Company index already cached (size=%d)", len(COMPANY_NAME_INDEX))
         return
+    elif not embedding_model:
+        logger.error("Embedding model not loaded, cannot build company index.")
+        # Clear potentially partially built state
+        COMPANY_NAME_INDEX = []
+        COMPANY_EMBEDDING_MATRIX = None
+        return
+
+    logger.info("Starting to build company name index...") # Indicate start
 
     conn = None
     embeddings: List[torch.Tensor] = []
     index: List[Dict[str, Any]] = []
     try:
         conn = get_db_connection()
-        # Use DictCursor if available for easier row access
+        if not conn:
+            logger.error("Failed to get DB connection for building company index.")
+            return # Cannot proceed without DB
+
         cur = None
         is_dict_cursor = False
         if psycopg2_extras:
              try:
                  cur = conn.cursor(cursor_factory=psycopg2_extras.DictCursor)
                  is_dict_cursor = True
+                 logger.debug("Using DictCursor for company index build.")
              except Exception as e:
                  logger.warning(f"Failed to create DictCursor, falling back to standard cursor: {e}")
                  cur = conn.cursor()
         else:
             cur = conn.cursor()
+            logger.debug("Using standard cursor for company index build.")
 
+        # Fetch only the necessary columns
         cur.execute(
             """
             SELECT fin_code, comp_name, symbol
@@ -247,41 +262,64 @@ def build_company_name_index() -> None:
             """
         )
         rows = cur.fetchall()
+        total_rows = len(rows) # Get total count for logging
         cur.close() # Close cursor promptly
-        logger.info("Fetched %d companies for embedding index", len(rows))
+        logger.info("Fetched %d companies for embedding index", total_rows)
 
         if not embedding_model:
-            logger.error("Embedding model not loaded, cannot build company index.")
+            # Double check model wasn't unloaded somehow
+            logger.error("Embedding model became unavailable during index build.")
             return
 
-        for idx, row in rows:
-            if idx % 100 == 0 or idx == len(rows):  # Log every 100 rows or at the end
-                percent_done = (idx / len(rows)) * 100
-                logger.info("Processed %d/%d companies (%.1f%%)", idx, len(rows), percent_done)
-                
-            # Access by key if DictCursor, otherwise by index
-            fin_code = row["fin_code"] if is_dict_cursor else row[0]
-            name = row["comp_name"] if is_dict_cursor else row[1]
-            symbol = row["symbol"] if is_dict_cursor else row[2]
-
-            # Create text representation for embedding
-            text = f"{name} ({symbol})".lower()
-            if len(text) < 4: # Skip very short names/symbols
-                continue
+        # --- *** CORRECTED LOOP *** ---
+        start_build_time = time.time()
+        for idx, row in enumerate(rows):
+            # Log progress periodically
+            if idx > 0 and (idx % 50000 == 0 or idx == total_rows - 1): # Log every 50k or at the end
+                percent_done = ((idx + 1) / total_rows) * 100
+                elapsed_time = time.time() - start_build_time
+                logger.info("Building company index: Processed %d/%d companies (%.1f%%) in %.1fs",
+                            idx + 1, total_rows, percent_done, elapsed_time)
 
             try:
+                # Access row elements correctly based on cursor type
+                fin_code = row["fin_code"] if is_dict_cursor else row[0]
+                name = row["comp_name"] if is_dict_cursor else row[1]
+                symbol = row["symbol"] if is_dict_cursor else row[2]
+
+                # Defensive checks for None/empty values just in case DB query allows them
+                if not fin_code or not name or not symbol:
+                    logger.warning(f"Skipping row index {idx} due to missing data: fin_code={fin_code}, name={name}, symbol={symbol}")
+                    continue
+
+                # Create text representation for embedding
+                text = f"{name} ({symbol})".lower()
+                if len(text) < 3: # Skip very short/potentially junk entries
+                    logger.debug(f"Skipping short text entry: '{text}' for fin_code={fin_code}")
+                    continue
+
+                # Encode and store
                 emb = embedding_model.encode(text, convert_to_tensor=True)
                 embeddings.append(emb)
                 index.append({"fin_code": fin_code, "name": name, "symbol": symbol, "index_text": text})
-            except Exception:
-                logger.exception("Encoding failed for fin_code=%s text='%s'", fin_code, text)
 
-        if embeddings:
+            except Exception as inner_exc:
+                # Log error for the specific row but continue building the index
+                row_identifier = f"fin_code={fin_code}" if 'fin_code' in locals() else f"row index {idx}"
+                logger.exception(f"Encoding or processing failed for {row_identifier}. Error: {inner_exc}. Row data (partial): {str(row)[:100]}")
+                # Optionally: continue? Or break if too many errors? For now, continue.
+
+        # --- *** END CORRECTED LOOP *** ---
+
+        if embeddings and index:
+            # Stack tensors only if embeddings were generated
             COMPANY_EMBEDDING_MATRIX = torch.stack(embeddings)
             COMPANY_NAME_INDEX = index
-            logger.info("Company index ready – %d embeddings", len(COMPANY_NAME_INDEX))
+            end_build_time = time.time()
+            logger.info("✅ Company index built successfully – %d entries in %.1f seconds.",
+                        len(COMPANY_NAME_INDEX), end_build_time - start_build_time)
         else:
-            logger.warning("No company embeddings generated – index left empty")
+            logger.warning("No company embeddings generated or index populated – index left empty.")
             COMPANY_EMBEDDING_MATRIX = None
             COMPANY_NAME_INDEX = []
 
@@ -290,14 +328,18 @@ def build_company_name_index() -> None:
         COMPANY_EMBEDDING_MATRIX = None
         COMPANY_NAME_INDEX = []
     except Exception as e:
+        # Catch unexpected errors during the build process
         logger.exception("Unexpected error building company index: %s", e)
         COMPANY_EMBEDDING_MATRIX = None
         COMPANY_NAME_INDEX = []
     finally:
-        logger.info("Build company name index excepted")
+        # Log completion regardless of success/failure
+        logger.info("Finished attempt to build company name index.")
         if conn:
             conn.close()
-
+            logger.debug("Database connection closed after company index build.")
+            
+            
 @log_call()
 def build_screener_index() -> None:
     """Populate SCREENER_INDEX & SCREENER_EMBEDDING_MATRIX from DB."""
