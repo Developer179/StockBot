@@ -1542,7 +1542,7 @@ def smart_ask():
         gemini_call_counter += 1
         logger.info(f"[Gemini Call #{gemini_call_counter}] General Fallback (No Rasa Payload)")
         # answer = get_llm_answer(prompt, original_question=original_question)
-        response_data.update({"answer": answer, "source": "llm_only"})
+        # response_data.update({"answer": answer, "source": "llm_only"})
 
 
     # --- Final Response Assembly ---
