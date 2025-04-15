@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # --- Database Connection Parameters ---
 # Consider replacing with environment variables for security
 DB_NAME = "univest"
-DB_USER = "postgres"
+DB_USER = "apple"
 DB_PASSWORD = "univest@123"
 DB_HOST = "localhost"
 DB_PORT = "5432"
