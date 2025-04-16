@@ -38,7 +38,6 @@ try:
     from app.routes.session import (
         build_screener_index,
         load_local_qa_store,
-        COMPANY_NAME_INDEX, # For checking count
         SCREENER_INDEX,     # For checking count
         qa_store            # For checking count
     )
