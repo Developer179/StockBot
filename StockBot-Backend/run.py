@@ -36,7 +36,6 @@ try:
     from app import create_app
     # Import functions needed for pre-loading
     from app.routes.session import (
-        build_company_name_index,
         build_screener_index,
         load_local_qa_store,
         COMPANY_NAME_INDEX, # For checking count
@@ -72,7 +71,6 @@ def main():
     try:
         #logger.info("Building company name index...")
         start_time = time.time()
-        build_company_name_index()
         duration = time.time() - start_time
         # Log success and count
         #logger.info(f"Company name index built successfully ({len(COMPANY_NAME_INDEX)} items) in {duration:.2f} seconds.")
