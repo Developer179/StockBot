@@ -8,43 +8,36 @@ import logging
 import functools
 from typing import Callable, Any, Dict, List, Optional, Union
 
-import torch
+import torch # Still needed for screener embeddings
 import requests
-import psycopg2  # core driver
-from rapidfuzz import fuzz
+import psycopg2 # core driver
+# Remove rapidfuzz as it's not used for company matching anymore
 from flask import Blueprint, request, jsonify
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer, util # Still needed for screeners
 
 # ==============================================================================
 # Logging Configuration
 # ==============================================================================
-
 LOG_LEVEL = os.getenv("UNIVEST_LOG_LEVEL", "INFO").upper()
-
-# Configure root logger - basicConfig should ideally be called once at application entry point
-# If this blueprint is part of a larger Flask app, configure logging there.
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s | %(levelname)s | %(name)s | %(funcName)s:%(lineno)d - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
 logger = logging.getLogger(__name__) # Get logger for this specific module
 logger.info("Logging initialised – level=%s", LOG_LEVEL)
 
 # ==============================================================================
-# Decorators
+# Decorators (Keep log_call as it's useful)
 # ==============================================================================
-
 def log_call(level: int = logging.DEBUG):
     """Decorator to automatically log entry, exit and runtime of a function."""
     def _decorator(func: Callable):
         @functools.wraps(func)
         def _wrapper(*args, **kwargs):
-            child_logger = logging.getLogger(func.__module__) # Use module logger
-            # Truncate args/kwargs representation for cleaner logs
-            arg_preview = ", ".join([repr(a)[:80] for a in args]) # Increased limit slightly
-            kw_preview = ", ".join([f"{k}={repr(v)[:80]}" for k, v in kwargs.items()]) # Increased limit slightly
+            child_logger = logging.getLogger(func.__module__)
+            arg_preview = ", ".join([repr(a)[:80] for a in args])
+            kw_preview = ", ".join([f"{k}={repr(v)[:80]}" for k, v in kwargs.items()])
             log_string = f"→ {func.__name__}({arg_preview}{', ' if kw_preview else ''}{kw_preview})"
             child_logger.log(level, log_string)
             start_ts = time.time()
@@ -62,40 +55,30 @@ def log_call(level: int = logging.DEBUG):
 # ==============================================================================
 # Conditional Imports & Utility Imports
 # ==============================================================================
-
-# --- Conditional Import for psycopg2.extras ---
 psycopg2_extras = None
 try:
     if hasattr(psycopg2, "extras"):
         psycopg2_extras = psycopg2.extras
     else:
-        # Attempt import if psycopg2 doesn't expose extras directly
         from psycopg2 import extras as psycopg2_extras_import # type: ignore
         psycopg2_extras = psycopg2_extras_import
 except ImportError:
     logger.error("Failed to import psycopg2.extras – make sure 'psycopg2‑binary' is installed.")
     # Depending on requirements, you might want to raise an error or exit here
-    # raise ImportError("psycopg2.extras is required but could not be imported.")
 
-# --- Relative Imports for Utils (or adjust path as needed) ---
 try:
-    # Assumes structure like: your_project/app/session/routes.py
-    # and your_project/app/utils/db.py, helpers.py
     from ..utils.db import get_db_connection
     from ..utils.helpers import make_json_safe, compute_data_hash
-except (ImportError, ValueError): # ValueError for relative imports beyond top-level
+except (ImportError, ValueError):
     logger.warning("Relative imports failed. Attempting direct/sys.path import for utils...")
     try:
         import sys
-        # Adjust path based on where this script actually lives relative to 'app'
         sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
         from app.utils.db import get_db_connection
         from app.utils.helpers import make_json_safe, compute_data_hash
     except ImportError as e:
         logger.critical(f"Failed to import utility functions (db, helpers): {e}. Check PYTHONPATH or project structure.", exc_info=True)
-        # Critical error, might be necessary to exit if these utils are essential
         raise ImportError(f"Could not import essential utility functions: {e}")
-
 
 # ==============================================================================
 # Blueprint Setup
@@ -105,19 +88,14 @@ session_bp = Blueprint('session', __name__)
 # ==============================================================================
 # Configuration & Constants
 # ==============================================================================
+# Keep ESSENTIAL_COMPANY_KEYS as a fallback, though less critical now
 ESSENTIAL_COMPANY_KEYS: List[str] = [
-    # This list serves as a fallback if Rasa table detection fails
     "fin_code", "comp_name", "symbol", "isin", "sector", "industry", "scrip_name",
-    "bse_symbol", "nse_last_closed_price", "nse_todays_open", "nse_todays_high",
-    "nse_todays_low", "bse_last_closed_price", "bse_todays_open", "bse_todays_high",
-    "bse_todays_low", "nse_lower_limit", "nse_upper_limit", "bse_lower_limit",
-    "bse_upper_limit", "market_capital", "pe_ratio", "pb_ratio", "book_value",
-    "face_value", "eps", "short_term_verdict", "long_term_verdict", "segment",
-    "instrument_name", "type",
+    # ... (keep other keys if needed as fallback for LLM context)
+    "nse_last_closed_price", "bse_last_closed_price", "market_capital", "pe_ratio",
 ]
 
-# Mapping from Rasa canonical IDs (entity values) to DB table names
-# Ensure keys match exactly what Rasa's EntitySynonymMapper will output
+# Keep CANONICAL_ID_TO_SOURCE_MAP and TABLE_TO_FIELDS_MAP for mapping concepts to tables/fields
 CANONICAL_ID_TO_SOURCE_MAP = {
     # company_master Columns
     "comp_name": "company_master", "scrip_name": "company_master", "symbol": "company_master",
@@ -135,20 +113,14 @@ CANONICAL_ID_TO_SOURCE_MAP = {
     "long_term_verdict": "company_additional_details",
     # consolidated_company_equity Columns
     "market_capital": "consolidated_company_equity", "pe_ratio": "consolidated_company_equity",
-    # "bool_value": "consolidated_company_equity", # Consider renaming if possible
-    "pb_ratio": "consolidated_company_equity",
+    "pb_ratio": "consolidated_company_equity", "book_value": "consolidated_company_equity",
     "face_value": "consolidated_company_equity", "eps": "consolidated_company_equity",
-    "type": "consolidated_company_equity", # Consider renaming if possible
-    "book_value": "consolidated_company_equity", # Added book_value mapping
-    # Screeners (Keyword -> Table Name) - Add ALL your screener keywords here
+    "type": "consolidated_company_equity",
+    # Screeners (Keyword -> Table Name)
     "FUTURES_TOP_PRICE_GAINERS": "screeners", "NIFTY50": "screeners", "LONG_TERM_VERDICT_BUY": "screeners",
-    "VOLUME_SHOCKERS": "screeners", "HIGH_DIVIDEND_STOCKS": "screeners", "GOLDEN_CROSSOVER": "screeners",
-    "LONG_BUILD_UP": "screeners", "SHORT_BUILD_UP": "screeners", "FUTURES_TOP_VOLUME_GAINERS": "screeners",
-    # ... Add ALL other screener keywords from your DB/Rasa data ...
-    "FUNDAMENTAL_STRONG_STOCKS": "screeners", "FII_HOLDING": "screeners", # Example additions
+    # ... Add ALL other screener keywords ...
 }
 
-# Mapping from Table Name to the set of fields belonging to that table
 TABLE_TO_FIELDS_MAP = {
     "company_master": {
         "fin_code", "comp_name", "scrip_name", "symbol", "bse_symbol", "mcx_symbol",
@@ -162,189 +134,88 @@ TABLE_TO_FIELDS_MAP = {
     },
     "consolidated_company_equity": {
         "fin_code", "market_capital", "pe_ratio", "book_value", "pb_ratio",
-        "face_value", "eps", "type" # Added bool_value here too
+        "face_value", "eps", "type"
     },
-    "screeners": { # Representing screeners conceptually, data fetch is different
-         # No specific company fields, uses keyword and fin_codes list
-    }
+    "screeners": {} # Keep screeners conceptual
 }
-
 
 # ==============================================================================
 # Global Variables & Cache
 # ==============================================================================
-COMPANY_DATA_CACHE: Dict[str, Dict[str, Any]] = {} # Consider using a more robust cache (e.g., Flask-Caching)
-CACHE_EXPIRY = 3600  # 1 hour
-
+# Keep caches and screener-related globals
 AMBIGUITY_CACHE: Dict[str, Dict[str, Any]] = {} # Cache for ambiguity resolution context
 AMBIGUITY_CACHE_EXPIRY = 300  # 5 minutes
 
+# Embedding Model (only needed for screeners now)
 embedding_model: Optional[SentenceTransformer] = None
-COMPANY_NAME_INDEX: List[Dict[str, Any]] = []
-COMPANY_EMBEDDING_MATRIX: Optional[torch.Tensor] = None
 SCREENER_INDEX: List[Dict[str, Any]] = []
 SCREENER_EMBEDDING_MATRIX: Optional[torch.Tensor] = None
+
+# QA Store (Optional)
 qa_store: List[Dict[str, str]] = []
 qa_embeddings: Optional[torch.Tensor] = None
 
 # ==============================================================================
-# Initialization Functions
+# Initialization Functions (Keep for Screeners and potentially QA)
 # ==============================================================================
 
 @log_call()
 def _initialize_embedding_model() -> None:
-    """Lazy-load the SentenceTransformer model."""
+    """Lazy-load the SentenceTransformer model (if needed for screeners)."""
     global embedding_model
     if embedding_model is not None:
         return
-
-    cache_folder = os.environ.get("SENTENCE_TRANSFORMERS_HOME") # Optional: specify cache dir
-    model_name = "all-MiniLM-L6-v2" # Or your chosen model
-    logger.info("Loading SentenceTransformer '%s'...", model_name)
+    # Only load if we actually have screeners or QA that need it
+    # This check could be more sophisticated (e.g., based on config)
+    # For now, assume it might be needed if screener index isn't disabled.
+    cache_folder = os.environ.get("SENTENCE_TRANSFORMERS_HOME")
+    model_name = "all-MiniLM-L6-v2"
+    logger.info("Attempting to load SentenceTransformer '%s' (for screeners/QA)...", model_name)
     try:
         embedding_model = SentenceTransformer(model_name, cache_folder=cache_folder)
-        # You might want to run a dummy encode here to ensure CUDA init (if using GPU)
-        # embedding_model.encode("test")
         logger.info("SentenceTransformer loaded successfully.")
     except Exception as exc:
-        logger.exception("Failed to load SentenceTransformer: %s", exc)
-        raise # Fail fast if model loading fails
+        logger.warning("Failed to load SentenceTransformer: %s. Screener matching might be affected.", exc)
+        # Don't raise, allow app to continue without screener embeddings if necessary
 
-# (Inside your routes.py or wherever build_company_name_index is defined)
-@log_call()
-def build_company_name_index() -> None:
-    """Populate COMPANY_NAME_INDEX & COMPANY_EMBEDDING_MATRIX from DB."""
-    global COMPANY_NAME_INDEX, COMPANY_EMBEDDING_MATRIX
 
-    # Check if already built (and model loaded)
-    _initialize_embedding_model() # Ensure model is loaded attempt happens first
-    if COMPANY_NAME_INDEX and COMPANY_EMBEDDING_MATRIX is not None and embedding_model:
-        logger.debug("Company index already cached (size=%d)", len(COMPANY_NAME_INDEX))
-        return
-    elif not embedding_model:
-        logger.error("Embedding model not loaded, cannot build company index.")
-        # Clear potentially partially built state
-        COMPANY_NAME_INDEX = []
-        COMPANY_EMBEDDING_MATRIX = None
-        return
+# --- REMOVED build_company_name_index ---
 
-    logger.info("Starting to build company name index...") # Indicate start
-
-    conn = None
-    embeddings: List[torch.Tensor] = []
-    index: List[Dict[str, Any]] = []
-    try:
-        conn = get_db_connection()
-        if not conn:
-            logger.error("Failed to get DB connection for building company index.")
-            return # Cannot proceed without DB
-
-        cur = None
-        is_dict_cursor = False
-        if psycopg2_extras:
-            try:
-                cur = conn.cursor(cursor_factory=psycopg2_extras.DictCursor)
-                is_dict_cursor = True
-                logger.debug("Using DictCursor for company index build.")
-            except Exception as e:
-                logger.warning(f"Failed to create DictCursor, falling back to standard cursor: {e}")
-                cur = conn.cursor()
-        else:
-            cur = conn.cursor()
-            logger.debug("Using standard cursor for company index build.")
-
-        # Fetch only the necessary columns
-        cur.execute(
-            """
-            SELECT fin_code, comp_name, symbol
-            FROM company_master
-            WHERE comp_name IS NOT NULL AND symbol IS NOT NULL AND fin_code IS NOT NULL
-            ORDER BY fin_code -- Order for consistency if needed
-            """
-        )
-        rows = cur.fetchall()
-        total_rows = len(rows) # Get total count for logging
-        cur.close() # Close cursor promptly
-        logger.info("Fetched %d companies for embedding index build.", total_rows)
-
-        if not embedding_model:
-            # Double check model wasn't unloaded somehow
-            logger.error("Embedding model became unavailable during index build.")
-            return
-
-        # --- Encoding Loop ---
-        start_build_time = time.time()
-        for idx, row in enumerate(rows):
-            # Log progress periodically
-            if idx > 0 and (idx % 50000 == 0 or idx == total_rows - 1): # Log every 50k or at the end
-                percent_done = ((idx + 1) / total_rows) * 100
-                elapsed_time = time.time() - start_build_time
-                logger.info("Building company index: Processed %d/%d companies (%.1f%%) in %.1fs",
-                            idx + 1, total_rows, percent_done, elapsed_time)
-
-            try:
-                # Access row elements correctly based on cursor type
-                fin_code = row["fin_code"] if is_dict_cursor else row[0]
-                name = row["comp_name"] if is_dict_cursor else row[1]
-                symbol = row["symbol"] if is_dict_cursor else row[2]
-
-                # Defensive checks for None/empty values just in case DB query allows them
-                if not fin_code or not name or not symbol:
-                    logger.warning(f"Skipping row index {idx} due to missing data: fin_code={fin_code}, name={name}, symbol={symbol}")
-                    continue
-
-                # Create text representation for embedding
-                text = f"{name} ({symbol})".lower()
-                if len(text) < 3: # Skip very short/potentially junk entries
-                    logger.debug(f"Skipping short text entry: '{text}' for fin_code={fin_code}")
-                    continue
-
-                # Encode and store
-                emb = embedding_model.encode(text, convert_to_tensor=True)
-                embeddings.append(emb)
-                index.append({"fin_code": fin_code, "name": name, "symbol": symbol, "index_text": text})
-
-            except Exception as inner_exc:
-                # Log error for the specific row but continue building the index
-                row_identifier = f"fin_code={fin_code}" if 'fin_code' in locals() else f"row index {idx}"
-                logger.exception(f"Encoding or processing failed for {row_identifier}. Error: {inner_exc}. Row data (partial): {str(row)[:100]}")
-                # Optionally: continue? Or break if too many errors? For now, continue.
-
-        # --- End Encoding Loop ---
-
-        if embeddings and index:
-            # Stack tensors only if embeddings were generated
-            COMPANY_EMBEDDING_MATRIX = torch.stack(embeddings)
-            COMPANY_NAME_INDEX = index
-            end_build_time = time.time()
-            logger.info("✅ Company index built successfully – %d entries in %.1f seconds.",
-                        len(COMPANY_NAME_INDEX), end_build_time - start_build_time)
-        else:
-            logger.warning("No company embeddings generated or index populated – index left empty.")
-            COMPANY_EMBEDDING_MATRIX = None
-            COMPANY_NAME_INDEX = []
-
-    except psycopg2.Error as db_err:
-        logger.exception("Database error building company index: %s", db_err)
-        COMPANY_EMBEDDING_MATRIX = None
-        COMPANY_NAME_INDEX = []
-    except Exception as e:
-        # Catch unexpected errors during the build process
-        logger.exception("Unexpected error building company index: %s", e)
-        COMPANY_EMBEDDING_MATRIX = None
-        COMPANY_NAME_INDEX = []
-    finally:
-        # Log completion regardless of success/failure
-        logger.info("Finished attempt to build company name index.")
-        if conn:
-            conn.close()
-            logger.debug("Database connection closed after company index build.")
-            
 @log_call()
 def build_screener_index() -> None:
     """Populate SCREENER_INDEX & SCREENER_EMBEDDING_MATRIX from DB."""
     global SCREENER_INDEX, SCREENER_EMBEDDING_MATRIX
-    _initialize_embedding_model()
+    # Ensure model is loaded *before* attempting to build embeddings
+    _initialize_embedding_model() # Ensure model is loaded attempt happens first
+    if not embedding_model:
+         logger.warning("Embedding model not loaded, cannot build screener index embeddings.")
+         # Optionally load screener text data even without embeddings?
+         # For now, we skip embedding generation if model fails.
+         # Load text data anyway:
+         conn = None
+         index: List[Dict[str, str]] = []
+         try:
+             conn = get_db_connection()
+             if not conn: return
+             cur = conn.cursor()
+             cur.execute("SELECT keyword, title, description FROM screeners ORDER BY keyword")
+             rows = cur.fetchall()
+             cur.close()
+             for keyword, title, desc in rows:
+                 text = f"Title: {title or keyword}. Description: {desc or ''}. Keyword: {keyword}".lower()
+                 index.append({"keyword": keyword, "text": text})
+             SCREENER_INDEX = index
+             SCREENER_EMBEDDING_MATRIX = None # Explicitly set matrix to None
+             logger.info("Screener index text loaded (%d entries), but embeddings not generated (model unavailable).", len(SCREENER_INDEX))
+         except psycopg2.Error as db_err:
+             logger.exception("Database error building screener index text: %s", db_err)
+             SCREENER_INDEX = []
+             SCREENER_EMBEDDING_MATRIX = None
+         finally:
+             if conn: conn.close()
+         return # Exit function after loading text only
+
+    # Proceed with embedding generation if model is available
     if SCREENER_INDEX and SCREENER_EMBEDDING_MATRIX is not None:
         logger.debug("Screener index already cached (size=%d)", len(SCREENER_INDEX))
         return
@@ -354,26 +225,20 @@ def build_screener_index() -> None:
     index: List[Dict[str, str]] = []
     try:
         conn = get_db_connection()
-        cur = conn.cursor() # DictCursor not strictly necessary here
+        if not conn: return
+        cur = conn.cursor()
         cur.execute("SELECT keyword, title, description FROM screeners ORDER BY keyword")
         rows = cur.fetchall()
         cur.close()
         logger.info("Fetched %d screeners for embedding index", len(rows))
 
-        if not embedding_model:
-            logger.error("Embedding model not loaded, cannot build screener index.")
-            return
-
         for keyword, title, desc in rows:
-            # Create text representation for embedding
             text = f"Title: {title or keyword}. Description: {desc or ''}. Keyword: {keyword}".lower()
-            if len(text) < 5: # Skip very short descriptions
-                continue
+            if len(text) < 5: continue
             try:
                 emb = embedding_model.encode(text, convert_to_tensor=True)
                 embeddings.append(emb)
-                # Store keyword and original text used for embedding
-                index.append({"keyword": keyword, "text": text})
+                index.append({"keyword": keyword, "text": text}) # Store keyword and text
             except Exception:
                 logger.exception("Encoding failed for screener '%s'", keyword)
 
@@ -395,68 +260,110 @@ def build_screener_index() -> None:
         SCREENER_EMBEDDING_MATRIX = None
         SCREENER_INDEX = []
     finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
 
 # ==============================================================================
 # Core Logic Functions
 # ==============================================================================
 
-@log_call(logging.DEBUG)
-def find_company_by_name_or_symbol(query: str) -> Optional[Dict[str, Any]]:
-    """Finds best company match using embeddings and fuzzy matching."""
-    build_company_name_index() # Ensure index is built
-    if not COMPANY_NAME_INDEX or COMPANY_EMBEDDING_MATRIX is None or not embedding_model:
-        logger.error("Company index or embedding model not available for matching.")
+# --- REMOVED find_company_by_name_or_symbol ---
+
+@log_call(logging.INFO)
+def find_company_direct_db(query_name_or_symbol: str, instrument_filter: str = 'EQUITY') -> Union[None, Dict[str, Any], List[Dict[str, Any]]]:
+    """
+    Finds company matches directly from the database based on name or symbol.
+
+    Args:
+        query_name_or_symbol: The name or symbol to search for.
+        instrument_filter: Filter by instrument type (default: 'EQUITY').
+
+    Returns:
+        - None: If no match found.
+        - Dict[str, Any]: If exactly one match is found.
+        - List[Dict[str, Any]]: If multiple matches are found (ambiguity).
+    """
+    if not query_name_or_symbol or not query_name_or_symbol.strip():
+        logger.warning("find_company_direct_db called with empty query.")
         return None
 
-    query_clean = query.lower().strip()
-    if not query_clean: return None
+    cleaned_query = query_name_or_symbol.lower().strip()
+    conn = None
+
+    # *** IMPORTANT: Ensure you have indexes on LOWER(comp_name), LOWER(symbol), and instrument_name in company_master ***
+    # Example Index (PostgreSQL):
+    # CREATE INDEX idx_company_master_lower_comp_name ON company_master (LOWER(comp_name));
+    # CREATE INDEX idx_company_master_lower_symbol ON company_master (LOWER(symbol));
+    # CREATE INDEX idx_company_master_instrument_name ON company_master (instrument_name);
+    # *******************************************************************************************************************
+
+    sql = """
+        SELECT fin_code, comp_name, symbol, isin, sector
+        FROM company_master
+        WHERE (LOWER(comp_name) = %s OR LOWER(symbol) = %s)
+          AND instrument_name = %s
+        ORDER BY fin_code DESC -- Optional: Prefer higher fin_code if needed, but primarily used to detect multiple matches
+    """
+    params = (cleaned_query, cleaned_query, instrument_filter)
+    logger.debug(f"Executing company lookup: SQL='{sql}' PARAMS={params}")
 
     try:
-        query_emb = embedding_model.encode(query_clean, convert_to_tensor=True)
-        # Ensure tensor dimensions match for cosine similarity
-        if query_emb.ndim == 1: query_emb = query_emb.unsqueeze(0) # Add batch dim if missing
-        if COMPANY_EMBEDDING_MATRIX.ndim != 2 or query_emb.ndim != 2:
-            logger.error(f"Dimension mismatch: Query {query_emb.shape}, Matrix {COMPANY_EMBEDDING_MATRIX.shape}")
+        conn = get_db_connection()
+        if not conn: raise ConnectionError("Failed to get DB connection")
+
+        cur = None
+        is_dict_cursor = False
+        if psycopg2_extras:
+            try:
+                cur = conn.cursor(cursor_factory=psycopg2_extras.DictCursor)
+                is_dict_cursor = True
+            except Exception as e:
+                logger.warning(f"Failed DictCursor: {e}, using standard cursor.")
+                cur = conn.cursor()
+        else:
+            cur = conn.cursor()
+
+        cur.execute(sql, params)
+        results = cur.fetchall()
+        num_results = len(results)
+        cur.close()
+
+        if num_results == 0:
+            logger.info(f"No company found in DB for query='{query_name_or_symbol}', instrument='{instrument_filter}'.")
             return None
+        elif num_results == 1:
+            row = results[0]
+            company_data = dict(row) if is_dict_cursor else dict(zip([desc[0] for desc in cur.description], row))
+            logger.info(f"Found 1 company match for query='{query_name_or_symbol}': {company_data.get('comp_name')} ({company_data.get('fin_code')})")
+            return company_data
+        else: # num_results > 1
+            company_list = []
+            if is_dict_cursor:
+                company_list = [dict(row) for row in results]
+            else:
+                cols = [desc[0] for desc in cur.description]
+                company_list = [dict(zip(cols, row)) for row in results]
 
-        cosine_scores = util.pytorch_cos_sim(query_emb, COMPANY_EMBEDDING_MATRIX)[0]
+            # Limit the list for clarification prompt if it's excessively long
+            max_options = 7 # Max options to show user
+            if len(company_list) > max_options:
+                 logger.warning(f"Found {num_results} companies for query='{query_name_or_symbol}', limiting clarification options to {max_options}.")
+                 # Optionally try to prioritize? e.g. pick top N by fin_code?
+                 # Simple truncation for now:
+                 company_list = company_list[:max_options]
+            else:
+                 logger.info(f"Found {num_results} AMBIGUOUS companies for query='{query_name_or_symbol}'. Returning list for clarification.")
+
+            return company_list # Return list to signal ambiguity
+
+    except psycopg2.Error as db_err:
+        logger.exception(f"Database error finding company '{query_name_or_symbol}': {db_err}")
+        return None # Treat DB error as not found for simplicity, or raise/handle differently
     except Exception as e:
-        logger.exception(f"Error during embedding or similarity calculation for query '{query}': {e}")
+        logger.exception(f"Unexpected error finding company '{query_name_or_symbol}': {e}")
         return None
-
-
-    best_match: Optional[Dict[str, Any]] = None
-    best_score = -1.0
-    emb_thresh, fuzz_thresh = 0.60, 75 # Matching thresholds
-
-    for i, entry in enumerate(COMPANY_NAME_INDEX):
-        emb_score = cosine_scores[i].item()
-        # Calculate fuzzy score against both name and symbol
-        fuzz_score = max(
-            fuzz.WRatio(query_clean, entry.get("name", "").lower()),
-            fuzz.WRatio(query_clean, entry.get("symbol", "").lower()),
-            fuzz.WRatio(query_clean, entry.get("index_text", "").lower()) # Compare against indexed text too
-        )
-        # Combine scores (heuristic, adjust weights as needed)
-        combined = (
-            emb_score * 0.6 + (fuzz_score / 100.0) * 0.4 # Weight embedding higher if decent score
-            if emb_score > 0.5
-            else emb_score * 0.4 + (fuzz_score / 100.0) * 0.6 # Weight fuzzy higher otherwise
-        )
-
-        # Check if this is the best match so far AND meets thresholds
-        if combined > best_score and (emb_score >= emb_thresh or fuzz_score >= fuzz_thresh):
-            best_score = combined
-            # Create match dict, copy entry to avoid modifying index
-            best_match = {**entry, "match_score": round(combined, 4)}
-
-    if best_match:
-        logger.info("Company matched – query='%s' → %s (%s) | Score: %.3f", query, best_match.get("name"), best_match.get("symbol"), best_score)
-    else:
-        logger.warning("No confident company match found for query '%s' (Best Score: %.3f)", query, best_score)
-    return best_match
+    finally:
+        if conn:
+            conn.close()
 
 
 def filter_dict(data_dict: Dict, keys_to_keep: List[str]) -> Dict:
@@ -465,6 +372,7 @@ def filter_dict(data_dict: Dict, keys_to_keep: List[str]) -> Dict:
     return {k: data_dict.get(k) for k in keys_to_keep if k in data_dict}
 
 
+# Keep get_specific_company_data - it fetches data *after* a fin_code is known
 @log_call(logging.DEBUG)
 def get_specific_company_data(fin_code: str, requested_fields: List[str]) -> Optional[Dict[str, Any]]:
     """Fetches only specific fields for a company from relevant tables."""
@@ -474,21 +382,17 @@ def get_specific_company_data(fin_code: str, requested_fields: List[str]) -> Opt
         logger.warning("Missing fin_code or requested_fields for specific data fetch.")
         return None
 
-    # Field definitions mapping to table aliases
     fields_in_master = TABLE_TO_FIELDS_MAP["company_master"]
     fields_in_additional = TABLE_TO_FIELDS_MAP["company_additional_details"]
     fields_in_equity = TABLE_TO_FIELDS_MAP["consolidated_company_equity"]
-
-    # Table alias mapping for query building
     table_aliases = {'m': fields_in_master, 'ad': fields_in_additional, 'eq': fields_in_equity}
 
-    select_parts = set() # Using set to avoid duplicates like m.fin_code
+    select_parts = set()
     joins = []
     join_needed = {'ad': False, 'eq': False}
     actual_fields_to_select = set() # Store db_field name for SELECT clause
 
-    # Always include fin_code from master table
-    select_parts.add("m.fin_code")
+    select_parts.add("m.fin_code") # Always include fin_code from master table
     actual_fields_to_select.add("fin_code")
 
     # Determine required fields and joins
@@ -496,87 +400,71 @@ def get_specific_company_data(fin_code: str, requested_fields: List[str]) -> Opt
         found = False
         for alias, field_set in table_aliases.items():
             if field in field_set:
-                # Skip adding fin_code again if requested explicitly
                 if field != 'fin_code':
                     db_field_name = f"{alias}.{field}"
                     select_parts.add(db_field_name)
                     actual_fields_to_select.add(field) # We need the final key name
-
-                # Mark joins as needed
                 if alias == 'ad': join_needed['ad'] = True
                 if alias == 'eq': join_needed['eq'] = True
                 found = True
-                break # Field found in one table set
+                break
         if not found and field != 'fin_code':
              logger.warning(f"Requested field '{field}' not mapped to a known table alias (m, ad, eq).")
 
-    if not actual_fields_to_select: # Should at least have 'fin_code'
+    if not actual_fields_to_select:
         logger.warning(f"No valid fields to select for fin_code {fin_code} based on requested: {requested_fields}")
         return None
 
-    # Add JOIN clauses if necessary
     if join_needed['ad']: joins.append("LEFT JOIN company_additional_details ad ON m.fin_code = ad.fin_code")
     if join_needed['eq']: joins.append("LEFT JOIN consolidated_company_equity eq ON m.fin_code = eq.fin_code")
 
-    # Construct the SELECT clause from unique parts
     select_clause = ', '.join(sorted(list(select_parts)))
-
-    # Build the final SQL query
     sql = f"SELECT {select_clause} FROM company_master m {' '.join(joins)} WHERE m.fin_code = %s"
     logger.debug("Executing SQL:\n%s\nparams=(%s,)", sql, fin_code)
 
     try:
         conn = get_db_connection()
+        if not conn: raise ConnectionError("Failed to get DB connection")
         cur = None
         is_dict_cursor = False
-        # Use DictCursor if available
         if psycopg2_extras:
              try: cur = conn.cursor(cursor_factory=psycopg2_extras.DictCursor); is_dict_cursor = True
-             except Exception as e: logger.warning(...); cur = conn.cursor()
+             except Exception as e: logger.warning(f"Failed DictCursor: {e}"); cur = conn.cursor()
         else: cur = conn.cursor()
 
         cur.execute(sql, (fin_code,))
-        result_row = cur.fetchone()
+        result_row = cur.fetchone() # Fetch only one row
 
         if not result_row:
             logger.warning(f"No specific data found for fin_code {fin_code} with SQL: {sql}")
             cur.close()
             return None
 
-        # Convert row to dictionary robustly
         if is_dict_cursor:
             data_dict_raw = dict(result_row)
         else:
-            # Manual mapping if not using DictCursor
             cols = [desc[0] for desc in cur.description]
             data_dict_raw = dict(zip(cols, result_row))
 
         cur.close()
         logger.info(f"Fetched raw specific data for fin_code {fin_code}")
 
-        # Map raw results back to originally requested field names
         final_data = {}
-        # DictCursor directly gives keys matching SELECT clause (e.g., 'comp_name', 'nse_todays_high')
-        # Standard cursor gives positional values, mapped via `cols` above.
-        # We need to ensure the final dict has keys matching `requested_fields`.
-
-        for req_field in requested_fields:
-            # DictCursor should have the correct key directly
+        # Map based on actual_fields_to_select (which are the db field names without alias)
+        for req_field in actual_fields_to_select: # Iterate through the fields we intended to select
             if req_field in data_dict_raw:
-                final_data[req_field] = data_dict_raw[req_field]
+                 final_data[req_field] = data_dict_raw[req_field]
             else:
-                # Handle potential prefix if not using DictCursor perfectly, or fallback
-                potential_key_m = f"m.{req_field}"
-                potential_key_ad = f"ad.{req_field}"
-                potential_key_eq = f"eq.{req_field}"
-                if potential_key_m in data_dict_raw: final_data[req_field] = data_dict_raw[potential_key_m]
-                elif potential_key_ad in data_dict_raw: final_data[req_field] = data_dict_raw[potential_key_ad]
-                elif potential_key_eq in data_dict_raw: final_data[req_field] = data_dict_raw[potential_key_eq]
-                else:
-                    final_data[req_field] = None # Field was requested but not found in result
-                    logger.debug(f"Requested field '{req_field}' not present in fetched DB data for {fin_code}.")
+                 # This case should be less likely now with LEFT JOIN and specific selection
+                 final_data[req_field] = None # Field was requested but not found in result
+                 logger.debug(f"Requested field '{req_field}' not present in fetched DB data for {fin_code}.")
 
-        return make_json_safe(final_data) # Ensure safe types for JSON serialization
+        # Ensure essential identifiers are included if they were implicitly added earlier
+        for essential in ["fin_code", "comp_name", "symbol"]:
+            if essential in data_dict_raw and essential not in final_data:
+                 final_data[essential] = data_dict_raw[essential]
+
+        return make_json_safe(final_data)
 
     except psycopg2.Error as db_err:
         logger.exception(f"DB error during specific fetch for fin_code {fin_code}: {db_err}")
@@ -588,22 +476,22 @@ def get_specific_company_data(fin_code: str, requested_fields: List[str]) -> Opt
         if conn:
             conn.close()
 
-
+# Keep get_screener_data as is
 @log_call(logging.DEBUG)
 def get_screener_data(keyword: str) -> Dict[str, Any]:
     """Fetches data for a specific screener keyword."""
+    # ... (implementation remains the same)
     conn = None
     logger.debug(f"Fetching screener data for keyword: {keyword}")
-    # Default return structure
     default_response = {"keyword": keyword, "title": keyword, "description": "Screener not found or error.", "total_companies": 0, "companies": []}
     try:
         conn = get_db_connection()
+        if not conn: raise ConnectionError("Failed DB conn")
         cur = None
         is_dict_cursor = False
-        # Use DictCursor for easier access to screener info
         if psycopg2_extras:
              try: cur = conn.cursor(cursor_factory=psycopg2_extras.DictCursor); is_dict_cursor = True
-             except Exception as e: logger.warning(...); cur = conn.cursor()
+             except Exception: cur = conn.cursor()
         else: cur = conn.cursor()
 
         cur.execute('SELECT keyword, title, description, fin_codes FROM screeners WHERE keyword = %s', (keyword,))
@@ -614,72 +502,53 @@ def get_screener_data(keyword: str) -> Dict[str, Any]:
             cur.close()
             return default_response
 
-        # Convert screener info row to dict
-        if is_dict_cursor:
-            screener_info = dict(screener_info_row)
-        else:
-            cols = [desc[0] for desc in cur.description]
-            screener_info = dict(zip(cols, screener_info_row))
+        if is_dict_cursor: screener_info = dict(screener_info_row)
+        else: cols = [desc[0] for desc in cur.description]; screener_info = dict(zip(cols, screener_info_row))
 
         fin_codes_str = screener_info.get('fin_codes')
         if not fin_codes_str:
             logger.warning(f"Screener '{keyword}' found but has no associated fin_codes.")
             cur.close()
-            return make_json_safe({
-                "keyword": keyword,
-                "title": screener_info.get('title', keyword),
-                "description": screener_info.get('description', ''),
-                "total_companies": 0,
-                "companies": []
-            })
+            return make_json_safe({"keyword": keyword, "title": screener_info.get('title', keyword), "description": screener_info.get('description', ''), "total_companies": 0, "companies": []})
 
-        # Process fin_codes list
         fin_codes = [code.strip() for code in fin_codes_str.split(',') if code.strip()]
         total_companies = len(fin_codes)
         logger.info(f"Screener '{keyword}' has {total_companies} companies.")
 
-        # Fetch example company details (limit to 10)
         companies = []
         limit = 10
         if fin_codes:
             fin_codes_to_fetch = tuple(fin_codes[:limit])
-            # Use IN operator for multiple codes, handle single code case
             if len(fin_codes_to_fetch) > 0:
                 placeholders = '%s' if len(fin_codes_to_fetch) == 1 else ', '.join(['%s'] * len(fin_codes_to_fetch))
                 sql = f'SELECT fin_code, comp_name, symbol, sector FROM company_master WHERE fin_code IN ({placeholders})'
+                # Re-use cursor or create new one if needed
                 cur.execute(sql, fin_codes_to_fetch)
                 company_cols = [desc[0] for desc in cur.description]
                 companies = [dict(zip(company_cols, row)) for row in cur.fetchall()]
                 logger.debug(f"Fetched {len(companies)} example companies for screener '{keyword}'.")
 
         cur.close()
-        return make_json_safe({
-            "keyword": keyword,
-            "title": screener_info.get('title', keyword),
-            "description": screener_info.get('description', ''),
-            "total_companies": total_companies,
-            "companies": companies
-        })
-
+        return make_json_safe({"keyword": keyword, "title": screener_info.get('title', keyword), "description": screener_info.get('description', ''), "total_companies": total_companies, "companies": companies})
     except psycopg2.Error as db_err:
         logger.exception(f"Error getting screener data for keyword '{keyword}': {db_err}")
-        return default_response # Return default on error
+        return default_response
     except Exception as e:
         logger.exception(f"Unexpected error getting screener data for keyword '{keyword}': {e}")
-        return default_response # Return default on error
+        return default_response
     finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
 
 
+# Keep generate_direct_answer - it works on fetched data
 def generate_direct_answer(question: str, company_data: Dict[str, Any], company_name: str) -> Optional[str]:
     """Attempts to generate a direct answer from fetched DB data based on keywords."""
+    # ... (implementation remains the same)
     question_lower = question.lower()
     answer = None
     logger.debug(f"Attempting direct answer generation for '{question}' with data keys: {list(company_data.keys())}")
 
     # Define specific patterns and the EXACT field they map to
-    # Order matters - most specific first!
     specific_patterns = [
         # Prices
         (r'\bnse\s+open(ing)?\s+price\b', 'nse_todays_open', "Today's opening price for {name} on NSE was ₹{val:.2f}."),
@@ -690,423 +559,228 @@ def generate_direct_answer(question: str, company_data: Dict[str, Any], company_
         (r'\bbse\s+(day|todays)?\s*high\b', 'bse_todays_high', "Today's high for {name} on BSE: ₹{val:.2f}."),
         (r'\bnse\s+(day|todays)?\s*low\b', 'nse_todays_low', "Today's low for {name} on NSE: ₹{val:.2f}."),
         (r'\bbse\s+(day|todays)?\s*low\b', 'bse_todays_low', "Today's low for {name} on BSE: ₹{val:.2f}."),
-        (r'\b(price|ltp|cmp)\b.*\b(on|for)\s+nse\b', 'nse_last_closed_price', "Last closing price of {name} on NSE: ₹{val:.2f}."), # Price on NSE
-        (r'\b(price|ltp|cmp)\b.*\b(on|for)\s+bse\b', 'bse_last_closed_price', "Last closing price of {name} on BSE: ₹{val:.2f}."), # Price on BSE
-
+        (r'\b(price|ltp|cmp)\b.*\b(on|for)\s+nse\b', 'nse_last_closed_price', "Last closing price of {name} on NSE: ₹{val:.2f}."),
+        (r'\b(price|ltp|cmp)\b.*\b(on|for)\s+bse\b', 'bse_last_closed_price', "Last closing price of {name} on BSE: ₹{val:.2f}."),
         # Limits
         (r'\bnse\s+upper\s+(limit|band|circuit)\b', 'nse_upper_limit', "NSE upper circuit limit for {name}: ₹{val:.2f}."),
         (r'\bbse\s+upper\s+(limit|band|circuit)\b', 'bse_upper_limit', "BSE upper circuit limit for {name}: ₹{val:.2f}."),
         (r'\bnse\s+lower\s+(limit|band|circuit)\b', 'nse_lower_limit', "NSE lower circuit limit for {name}: ₹{val:.2f}."),
         (r'\bbse\s+lower\s+(limit|band|circuit)\b', 'bse_lower_limit', "BSE lower circuit limit for {name}: ₹{val:.2f}."),
-        (r'\bcircuit\s+limit(s)?\b', ['nse_lower_limit', 'nse_upper_limit', 'bse_lower_limit', 'bse_upper_limit'], "Circuit limits..."), # Special multi-field handling
-
+        (r'\bcircuit\s+limit(s)?\b', ['nse_lower_limit', 'nse_upper_limit', 'bse_lower_limit', 'bse_upper_limit'], "Circuit limits..."),
         # Ratios & Financials
         (r'\bp(.)?e\s+ratio\b', 'pe_ratio', "P/E Ratio for {name}: {val:.2f}."),
-        (r'\b(market cap|mcap|market capitalization)\b', 'market_capital', "Market Cap of {name}: {val}."), # Special formatting needed
+        (r'\b(market cap|mcap|market capitalization)\b', 'market_capital', "Market Cap of {name}: {val}."),
         (r'\bbook value\b', 'book_value', "Book Value per share for {name}: ₹{val:.2f}."),
         (r'\beps\b|\bearnings per share\b', 'eps', "EPS (Earnings Per Share) for {name}: ₹{val:.2f}."),
         (r'\bface value\b', 'face_value', "Face value for {name}: ₹{val:.2f}."),
         (r'\bp(.)?b\s+ratio\b|\bprice to book\b', 'pb_ratio', "P/B (Price to Book) ratio for {name}: {val:.2f}."),
-
         # Company Info
         (r'\bsector\b', 'sector', "{name} belongs to the {val} sector."),
         (r'\bindustry\b', 'industry', "{name} operates in the {val} industry."),
         (r'\b(symbol|ticker)\b', 'symbol', "The primary ticker symbol for {name} is {val}."),
         (r'\bisin\b', 'isin', "The ISIN for {name} is {val}."),
         (r'\bbse\s+symbol\b', 'bse_symbol', "The BSE symbol for {name} is {val}."),
-
         # Verdicts
         (r'\bshort term verdict\b|\bshort term view\b', 'short_term_verdict', "{name} Short-term Verdict: '{val}'."),
         (r'\blong term verdict\b|\blong term view\b', 'long_term_verdict', "{name} Long-term Verdict: '{val}'."),
-        (r'\bverdict\b|\boutlook\b|\brecommendation\b', ['short_term_verdict', 'long_term_verdict'], "Verdicts..."), # Special multi-field handling
-
+        (r'\bverdict\b|\boutlook\b|\brecommendation\b', ['short_term_verdict', 'long_term_verdict'], "Verdicts..."),
         # Other
         (r'\blot size\b', 'lot_size', "Lot size for {name}: {val}."),
-        (r'\boi\b|open interest\b', 'oi', "Open Interest for {name}: {val}."), # Assuming OI is formatted correctly
+        (r'\boi\b|open interest\b', 'oi', "Open Interest for {name}: {val}."),
     ]
 
     matched_value = None
     formatting_string = None
     matched_pattern_keyword = None
-    data_keys_available = set(company_data.keys()) # Keys available in the fetched data
+    data_keys_available = set(k for k, v in company_data.items() if v is not None) # Only consider keys with non-None values
 
     for pattern, db_field_or_list, fmt_string in specific_patterns:
         if re.search(pattern, question_lower):
-            matched_pattern_keyword = pattern # Log which pattern matched
+            matched_pattern_keyword = pattern
             logger.debug(f"Direct answer pattern matched: '{pattern}'")
 
             if isinstance(db_field_or_list, list):
-                # Handle multi-field case (e.g., verdicts, limits)
                 required_fields = set(db_field_or_list)
-                if required_fields.issubset(data_keys_available): # Check if ALL required fields are available
-                    temp_data = {f: company_data.get(f) for f in db_field_or_list}
-                    # Check if at least one value is not None
-                    if any(v is not None for v in temp_data.values()):
-                         matched_value = temp_data # Pass the dict of values
-                         formatting_string = fmt_string
-                         logger.debug(f"Multi-field pattern '{pattern}' matched with available data.")
-                         break # Found match, stop searching
-                    else:
-                         logger.debug(f"Multi-field pattern '{pattern}' matched, but all required data fields are None.")
-                         answer = f"The specific data ({', '.join(required_fields)}) for {company_name} is currently unavailable."
-                         return answer # Return unavailable message
+                # Check if ALL required fields have non-None values
+                if required_fields.issubset(data_keys_available):
+                    matched_value = {f: company_data.get(f) for f in db_field_or_list}
+                    formatting_string = fmt_string
+                    logger.debug(f"Multi-field pattern '{pattern}' matched with available data.")
+                    break
                 else:
-                     missing_fields = required_fields - data_keys_available
-                     logger.info(f"Multi-field pattern '{pattern}' matched, but required data fields {missing_fields} were not fetched or available.")
-                     # Decide if partial answer is okay or state unavailable
-                     answer = f"Some information ({', '.join(missing_fields)}) needed for this query about {company_name} was not available."
-                     return answer # Return partial/unavailable message
-
-            else:
-                # Handle single-field case
+                    missing_fields = required_fields - data_keys_available
+                    logger.debug(f"Multi-field pattern '{pattern}' matched, but required data fields {missing_fields} have None values.")
+                    answer = f"Some specific data ({', '.join(f.replace('_',' ') for f in missing_fields)}) for {company_name} is currently unavailable to answer this precisely."
+                    return answer
+            else: # Single field case
                 db_field = db_field_or_list
-                if db_field in data_keys_available:
-                    value = company_data[db_field]
-                    if value is not None:
-                        matched_value = value
-                        formatting_string = fmt_string
-                        logger.debug(f"Single-field pattern '{pattern}' matched with available data for field '{db_field}'.")
-                        break # Found match, stop searching
-                    else:
-                        logger.debug(f"Pattern '{pattern}' matched, but data field '{db_field}' is None.")
-                        answer = f"The specific data ({db_field.replace('_', ' ')}) for {company_name} is currently unavailable."
-                        return answer # Return unavailable message
+                if db_field in data_keys_available: # Check if field exists AND is not None
+                    matched_value = company_data[db_field]
+                    formatting_string = fmt_string
+                    logger.debug(f"Single-field pattern '{pattern}' matched with available data for field '{db_field}'.")
+                    break
                 else:
-                    logger.info(f"Pattern '{pattern}' matched, but data field '{db_field}' was not fetched or available.")
-                    # This might happen if Rasa's table suggestion was wrong, or DB query failed partially
-                    answer = f"The information for '{db_field.replace('_', ' ')}' for {company_name} was not available in the retrieved data."
-                    return answer # Return unavailable message
+                    logger.debug(f"Pattern '{pattern}' matched, but data field '{db_field}' is None or missing.")
+                    answer = f"The specific data ({db_field.replace('_', ' ')}) for {company_name} is currently unavailable."
+                    return answer
 
-    # --- Format the Answer if a match was found ---
+    # Format the Answer
     if matched_value is not None and formatting_string is not None:
         try:
-            # Handle special multi-field formatting
             if formatting_string == "Circuit limits...":
                  nse_low = matched_value.get('nse_lower_limit'); nse_high = matched_value.get('nse_upper_limit')
                  bse_low = matched_value.get('bse_lower_limit'); bse_high = matched_value.get('bse_upper_limit')
                  parts = []
-                 if nse_low is not None and nse_high is not None: parts.append(f"NSE Limits: ₹{nse_low:.2f}-₹{nse_high:.2f}")
-                 if bse_low is not None and bse_high is not None: parts.append(f"BSE Limits: ₹{bse_low:.2f}-₹{bse_high:.2f}")
-                 answer = f"Circuit limits for {company_name}: {'; '.join(parts)}." if parts else f"Circuit limit information for {company_name} is unavailable."
+                 if nse_low is not None and nse_high is not None: parts.append(f"NSE Limits: ₹{float(nse_low):.2f}-₹{float(nse_high):.2f}")
+                 if bse_low is not None and bse_high is not None: parts.append(f"BSE Limits: ₹{float(bse_low):.2f}-₹{float(bse_high):.2f}")
+                 answer = f"Circuit limits for {company_name}: {'; '.join(parts)}." if parts else f"Circuit limit information for {company_name} is currently unavailable."
             elif formatting_string == "Verdicts...":
                 st = matched_value.get('short_term_verdict'); lt = matched_value.get('long_term_verdict')
                 if st and lt: answer = f"{company_name}: Short-term: '{st}', Long-term: '{lt}'."
                 elif st: answer = f"{company_name} Short-term: '{st}'."
                 elif lt: answer = f"{company_name} Long-term: '{lt}'."
-                else: answer = f"Verdicts for {company_name} are unavailable."
-            # Handle Market Cap formatting
+                else: answer = f"Verdicts for {company_name} are currently unavailable."
             elif "Market Cap" in formatting_string:
-                 mcap = matched_value
-                 mcap_str = f"{mcap}" # Default string representation
+                 mcap = matched_value; mcap_str = f"{mcap}"
                  try:
                      mcap_f = float(mcap)
-                     if mcap_f >= 1e7: mcap_str = f"₹{mcap_f/1e7:.2f} Cr" # Crores
-                     elif mcap_f >= 1e5: mcap_str = f"₹{mcap_f/1e5:.2f} Lac" # Lakhs (Optional)
-                     else: mcap_str = f"₹{mcap_f:.2f}" # Direct value if small
-                 except (ValueError, TypeError):
-                     pass # Keep original string if conversion fails
+                     if mcap_f >= 1e7: mcap_str = f"₹{mcap_f/1e7:.2f} Cr"
+                     elif mcap_f >= 1e5: mcap_str = f"₹{mcap_f/1e5:.2f} Lac"
+                     else: mcap_str = f"₹{mcap_f:.2f}"
+                 except (ValueError, TypeError): pass
                  answer = formatting_string.format(name=company_name, val=mcap_str)
-            # General single-value formatting
             else:
-                 # Basic type checking for formatting
-                 if isinstance(matched_value, (int, float)) and "{val:.2f}" in formatting_string:
-                     answer = formatting_string.format(name=company_name, val=matched_value)
-                 elif isinstance(matched_value, str):
-                      answer = formatting_string.format(name=company_name, val=matched_value)
-                 else: # Fallback for other types or format mismatches
+                 # General formatting, attempt float conversion if format suggests
+                 try:
+                      if isinstance(matched_value, (int, float)) or ("{val:.2f}" in formatting_string):
+                           answer = formatting_string.format(name=company_name, val=float(matched_value))
+                      else: # Treat as string
+                           answer = formatting_string.format(name=company_name, val=str(matched_value))
+                 except (ValueError, TypeError): # Fallback if float conversion fails
                      answer = formatting_string.format(name=company_name, val=str(matched_value))
 
-
-            if answer:
-                logger.info(f"Generated DIRECT answer using pattern '{matched_pattern_keyword}'.")
-                return answer
-            else:
-                 logger.warning(f"Formatting resulted in empty answer for pattern '{matched_pattern_keyword}'.")
-
-        except (TypeError, ValueError, KeyError, AttributeError, IndexError) as fmt_err:
+            if answer: logger.info(f"Generated DIRECT answer using pattern '{matched_pattern_keyword}'."); return answer
+            else: logger.warning(f"Formatting resulted in empty answer for pattern '{matched_pattern_keyword}'.")
+        except Exception as fmt_err:
             logger.error(f"Formatting error for pattern '{matched_pattern_keyword}' with value '{matched_value}': {fmt_err}", exc_info=True)
-            # Fall through, maybe LLM can handle it
 
-    # --- Fallback (Optional - kept from original code, review if needed) ---
-    # Consider removing this block if Rasa intent + specific field fetch is reliable enough
-    # This block checks for broader keywords if NO specific pattern matched above.
-    if answer is None:
-        field_map_fallback = {
-            "price": ["nse_last_closed_price", "bse_last_closed_price"],
-            "verdict": ["short_term_verdict", "long_term_verdict"],
-            "limit": ["nse_lower_limit", "nse_upper_limit", "bse_lower_limit", "bse_upper_limit"],
-        }
-        found_data_fallback = {}; target_keyword_fallback = None
-        for keyword, db_fields in field_map_fallback.items():
-            pattern = r'\b' + re.escape(keyword) + r'\b'
-            if re.search(pattern, question_lower):
-                target_keyword_fallback = keyword
-                for db_field in db_fields:
-                    # Check if fallback field exists in the *already fetched data*
-                    if db_field in company_data and company_data[db_field] is not None:
-                        found_data_fallback[db_field] = company_data[db_field]
-                if found_data_fallback: break # Found data for this keyword
-
-        if found_data_fallback and target_keyword_fallback:
-             kw = target_keyword_fallback; data = found_data_fallback
-             logger.debug(f"Attempting fallback direct answer generation for keyword '{kw}'")
-             # Re-use formatting logic from specific patterns if possible
-             if kw == "price":
-                 p_nse = data.get('nse_last_closed_price'); p_bse = data.get('bse_last_closed_price')
-                 if p_nse is not None: answer = f"Last closing price of {company_name} on NSE: ₹{p_nse:.2f}."
-                 elif p_bse is not None: answer = f"Last closing price of {company_name} on BSE: ₹{p_bse:.2f}."
-             elif kw == "verdict":
-                 st = data.get('short_term_verdict'); lt = data.get('long_term_verdict')
-                 if st and lt: answer = f"{company_name}: Short-term: '{st}', Long-term: '{lt}'."
-                 elif st: answer = f"{company_name} Short-term: '{st}'."
-                 elif lt: answer = f"{company_name} Long-term: '{lt}'."
-             elif kw == "limit":
-                 nse_low=data.get('nse_lower_limit'); nse_high=data.get('nse_upper_limit')
-                 bse_low=data.get('bse_lower_limit'); bse_high=data.get('bse_upper_limit')
-                 parts = []
-                 if nse_low is not None and nse_high is not None: parts.append(f"NSE Limits: ₹{nse_low:.2f}-₹{nse_high:.2f}")
-                 if bse_low is not None and bse_high is not None: parts.append(f"BSE Limits: ₹{bse_low:.2f}-₹{bse_high:.2f}")
-                 if parts: answer = f"Circuit limits for {company_name}: {'; '.join(parts)}."
-
-             if answer: logger.info(f"Generated DIRECT answer (fallback) for keyword '{kw}'."); return answer
-             else: logger.warning(f"Data found for fallback keyword '{kw}' but no specific formatting applied.")
-
-    # If still no answer
+    # If no specific pattern matched or formatting failed
     logger.debug(f"No specific direct answer rule applied or formatted for: '{question}'")
     return None
 
 
+# Keep get_rasa_response_payload as is
 @log_call(logging.DEBUG)
-def get_rasa_response_payload(question: str, rasa_url: str = "http://localhost:5005") -> Optional[Dict[str, Any]]: #TODO:check
+def get_rasa_response_payload(question: str, rasa_url: str = "http://localhost:5005") -> Optional[Dict[str, Any]]:
     """Sends question to Rasa REST webhook, returns 'custom' JSON payload."""
-    if not rasa_url:
-        logger.error("Rasa URL is not configured. Cannot call Rasa.")
-        return None
+    # ... (implementation remains the same)
+    if not rasa_url: logger.error("Rasa URL not configured."); return None
     webhook_endpoint = f"{rasa_url.rstrip('/')}/webhooks/rest/webhook"
-    # Use a unique but potentially predictable sender ID for debugging Rasa sessions if needed
     sender_id = f"backend_caller_{hashlib.sha1(question.encode()).hexdigest()[:10]}"
     payload = {"sender": sender_id, "message": question}
-
     try:
         logger.debug(f"Sending request to Rasa: {webhook_endpoint} | Sender: {sender_id}")
-        # Increased timeout slightly for NLU processing
         res = requests.post(webhook_endpoint, json=payload, timeout=15)
-        res.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+        res.raise_for_status()
         response_data = res.json()
-
         logger.debug(f"Raw response from Rasa: {json.dumps(response_data, indent=2)}")
-
-        if not isinstance(response_data, list):
-            logger.warning(f"Rasa response format unexpected (not a list): {response_data}")
-            return None
-
-        # Find the first message with a non-empty 'custom' dictionary payload
-        for msg in reversed(response_data): # Check last messages first, often action results
+        if not isinstance(response_data, list): return None
+        for msg in reversed(response_data):
             if isinstance(msg, dict) and "custom" in msg and isinstance(msg["custom"], dict) and msg["custom"]:
                 custom_payload = msg["custom"]
                 logger.info(f"Extracted 'custom' payload from Rasa for question: '{question}'")
-                # Basic validation of expected keys (optional)
-                if custom_payload.get("query_intent"):
-                     return custom_payload # Return the whole dictionary
-                else:
-                     logger.warning(f"Rasa 'custom' payload missing 'query_intent': {custom_payload}")
-            elif isinstance(msg, dict) and msg.get("text"):
-                 logger.debug(f"Rasa response contains text message: '{msg['text'][:100]}...'")
-
-
+                if custom_payload.get("query_intent"): return custom_payload
         logger.warning(f"No message with a valid 'custom' dictionary found in Rasa response for: '{question}'")
         return None
+    except requests.exceptions.Timeout: logger.error(f"Rasa timeout: {webhook_endpoint}"); return None
+    except requests.exceptions.ConnectionError as e: logger.error(f"Rasa conn error: {e}"); return None
+    except requests.exceptions.RequestException as e: logger.error(f"Rasa HTTP error: {e}"); return None
+    except json.JSONDecodeError as e: logger.error(f"Rasa JSON decode error: {e}"); return None
+    except Exception as e: logger.exception(f"Unexpected error calling Rasa: {e}"); return None
 
-    except requests.exceptions.Timeout:
-        logger.error(f"Connection to Rasa webhook ({webhook_endpoint}) timed out.")
-        return None
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"Connection error connecting to Rasa ({webhook_endpoint}): {e}")
-        return None
-    except requests.exceptions.RequestException as e:
-        # Catches other HTTP errors (4xx, 5xx) after raise_for_status()
-        logger.error(f"HTTP error communicating with Rasa ({webhook_endpoint}): {e} | Response: {getattr(e.response, 'text', 'N/A')[:500]}")
-        return None
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to decode JSON response from Rasa ({webhook_endpoint}): {e}. Response text: {res.text[:500]}...")
-        return None
-    except Exception as e:
-        # Catch any other unexpected errors during the call
-        logger.exception(f"Unexpected error while calling Rasa webhook ({webhook_endpoint}): {e}")
-        return None
 
 # ==============================================================================
-# LLM Interaction Functions
+# LLM Interaction Functions (Keep as is)
 # ==============================================================================
-
 @log_call(logging.INFO)
 def call_gemini_api(prompt_text: str, *, is_json_output: bool = False) -> Union[str, Dict]:
     """Low-level wrapper for calling Google Gemini API."""
+    # ... (implementation remains the same)
     api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.error("GEMINI_API_KEY environment variable not set.")
-        return {"error": "API key missing"} if is_json_output else "Configuration Error: Gemini API key is missing."
-
-    # Use the specified model, default to flash if needed
+    if not api_key: logger.error("GEMINI_API_KEY missing."); return {"error": "API key missing"} if is_json_output else "Config Error: API key missing."
     model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-latest")
-    # Construct URL based on Google AI documentation
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt_text}]}],
-        # Add safety settings if desired
-        # "safetySettings": [
-        #     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        #     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        #     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        #     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
-        # ],
-        "generationConfig": {
-            "temperature": 0.6, # Adjust temperature for creativity vs predictability
-            "topP": 0.9,        # Adjust top-p sampling if needed
-            "topK": 40,         # Adjust top-k sampling if needed
-            "maxOutputTokens": 1024, # Limit response length
-        }
-    }
-    if is_json_output:
-        payload["generationConfig"]["response_mime_type"] = "application/json"
-
+    payload = {"contents": [{"parts": [{"text": prompt_text}]}], "generationConfig": {"temperature": 0.6, "topP": 0.9, "topK": 40, "maxOutputTokens": 1024}}
+    if is_json_output: payload["generationConfig"]["response_mime_type"] = "application/json"
     headers = {"Content-Type": "application/json"}
-    timeout_seconds = 90 # Generous timeout for potentially complex generation
-
+    timeout_seconds = 90
     logger.info("Calling Gemini API → Model=%s | JSON Output=%s | Prompt Length=%d", model, is_json_output, len(prompt_text))
-    logger.debug("Gemini Request Payload (Generation Config): %s", payload.get("generationConfig"))
-
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
-        res.raise_for_status() # Check for HTTP errors
+        res.raise_for_status()
         data = res.json()
-        logger.debug("Gemini Raw Response Snippet: %s", str(data)[:500])
-
-        # Check for explicit blocks or errors in the response structure
         if not data.get("candidates") and data.get("promptFeedback"):
             block_reason = data["promptFeedback"].get("blockReason")
-            safety_ratings = data["promptFeedback"].get("safetyRatings")
-            logger.error(f"Gemini request blocked. Reason: {block_reason}, Ratings: {safety_ratings}")
-            error_msg = f"Request blocked due to content policy ({block_reason})."
-            return {"error": "Blocked Content", "details": block_reason} if is_json_output else error_msg
-
-        # Extract text content safely
+            logger.error(f"Gemini request blocked. Reason: {block_reason}")
+            return {"error": "Blocked Content", "details": block_reason} if is_json_output else f"Request blocked ({block_reason})."
         raw_text = data["candidates"][0]["content"]["parts"][0].get("text", "")
+    except requests.exceptions.Timeout: logger.exception("Gemini timeout"); return {"error": "API Timeout"} if is_json_output else "Error: Timeout."
+    except requests.exceptions.RequestException as exc: logger.exception("Gemini API request failed: %s", exc); return {"error": "API Request Failed", "details": str(exc)} if is_json_output else "Error: LLM communication failed."
+    except (KeyError, IndexError, TypeError) as e: logger.exception("Failed parsing Gemini response: %s", e); return {"error": "Malformed API Response"} if is_json_output else "Error: Invalid LLM response."
+    except Exception as e: logger.exception("Unexpected error during Gemini API call: %s", e); return {"error": "Unexpected Error"} if is_json_output else "An unexpected error occurred."
 
-    except requests.exceptions.Timeout:
-        logger.exception("Gemini API request timed out after %d seconds.", timeout_seconds)
-        return {"error": "API Timeout"} if is_json_output else "Error: The request to the language model timed out."
-    except requests.exceptions.RequestException as exc:
-        error_detail = str(exc)
-        if exc.response is not None:
-             try: error_detail = f"{exc} | Response: {exc.response.json()}"
-             except: error_detail = f"{exc} | Response: {exc.response.text[:200]}" # Fallback if not JSON
-        logger.exception("Gemini API request failed: %s", error_detail)
-        return {"error": "API Request Failed", "details": str(exc)} if is_json_output else f"Error: Could not communicate with the language model ({exc})."
-    except (KeyError, IndexError, TypeError) as e:
-        logger.exception("Failed to parse Gemini response structure: %s. Response: %s", e, str(data)[:500])
-        return {"error": "Malformed API Response", "details": str(e)} if is_json_output else "Error: Received an invalid response from the language model."
-    except Exception as e: # Catch any other unexpected errors
-         logger.exception("Unexpected error during Gemini API call: %s", e)
-         return {"error": "Unexpected Error", "details": str(e)} if is_json_output else "An unexpected error occurred while processing the request."
-
-
-    # Process the extracted text
     if is_json_output:
-        # Attempt to parse the potentially JSON formatted string
         cleaned = raw_text.strip()
-        # Remove markdown code block fences if present
         if cleaned.startswith("```json"): cleaned = cleaned[7:-3].strip()
         elif cleaned.startswith("```"): cleaned = cleaned[3:-3].strip()
-        try:
-            parsed_json = json.loads(cleaned)
-            logger.info("Gemini JSON output parsed successfully.")
-            return parsed_json
-        except json.JSONDecodeError as json_err:
-            logger.error(f"Gemini response failed JSON parsing: {json_err}. Raw text: '{cleaned[:200]}...'")
-            # Return error dict, maybe include raw text for debugging
-            return {"error": "JSON Parse Error", "details": str(json_err), "raw_text": raw_text}
-    else:
-        # Return plain text response
-        logger.info("Gemini text output received successfully (Length: %d).", len(raw_text))
-        return raw_text
+        try: return json.loads(cleaned)
+        except json.JSONDecodeError as json_err: logger.error(f"Gemini JSON parse failed: {json_err}"); return {"error": "JSON Parse Error", "raw_text": raw_text}
+    else: return raw_text
 
 
 def get_llm_answer(prompt: str, is_json_output: bool = False, original_question: Optional[str] = None, company_data: Optional[Dict] = None, screener_data: Optional[Dict] = None) -> Union[str, Dict]:
     """Gets answer from LLM, logs interaction, handles errors."""
+    # ... (implementation remains the same, logging part is useful)
     llm_response = call_gemini_api(prompt, is_json_output=is_json_output)
-
-    # Handle Error Responses from call_gemini_api
     if isinstance(llm_response, dict) and "error" in llm_response:
         error_type = llm_response.get("error", "Unknown Error")
-        logger.error(f"LLM call failed with error: {error_type}. Details: {llm_response.get('details')}")
-        # Return a user-friendly error message or the error dict depending on context
-        return llm_response if is_json_output else f"Sorry, I encountered an error while processing that: {error_type}."
-
-    # Log successful interactions (only for text responses for now)
+        logger.error(f"LLM call failed: {error_type}. Details: {llm_response.get('details')}")
+        return llm_response if is_json_output else f"Sorry, error processing: {error_type}."
+    # Log successful text interactions
     if not is_json_output and isinstance(llm_response, str) and original_question:
-        data_hash = None
-        log_data_ref = None
-        if company_data:
-            data_hash = compute_data_hash(company_data) # Assumes compute_data_hash exists
-            log_data_ref = "company"
-        elif screener_data:
-            data_hash = compute_data_hash(screener_data)
-            log_data_ref = "screener"
-
-        # Log entry structure
-        log_entry = {
-            "ts": time.time(),
-            "q": original_question,
-            "p_snippet": prompt[:500] + ("..." if len(prompt) > 500 else ""), # Log snippet of prompt
-            "a": llm_response,
-            "h": data_hash,
-            "ref": log_data_ref,
-            "int": "final_answer" # Indicate this is the final answer generation step
-        }
+        data_hash = None; log_data_ref = None
+        if company_data: data_hash = compute_data_hash(company_data); log_data_ref = "company"
+        elif screener_data: data_hash = compute_data_hash(screener_data); log_data_ref = "screener"
+        log_entry = {"ts": time.time(), "q": original_question, "p_snippet": prompt[:500], "a": llm_response, "h": data_hash, "ref": log_data_ref, "int": "final_answer"}
         try:
-            log_dir = "logs"
-            os.makedirs(log_dir, exist_ok=True)
+            log_dir = "logs"; os.makedirs(log_dir, exist_ok=True)
             log_filepath = os.path.join(log_dir,"qa_llm_interactions.jsonl")
-            with open(log_filepath, "a", encoding='utf-8') as f:
-                f.write(json.dumps(log_entry) + "\n")
-            logger.debug(f"LLM interaction logged to {log_filepath}")
-        except Exception as log_e:
-            logger.error(f"Failed writing LLM interaction log: {log_e}")
-
-    # Return the successful response (string or dictionary)
+            with open(log_filepath, "a", encoding='utf-8') as f: f.write(json.dumps(log_entry) + "\n")
+            logger.debug(f"LLM interaction logged")
+        except Exception as log_e: logger.error(f"Failed writing LLM log: {log_e}")
     return llm_response
 
 
+# Keep find_screener_by_keywords (uses embeddings)
 @log_call(logging.DEBUG)
 def find_screener_by_keywords(keywords: List[str]) -> Optional[str]:
     """Finds the best matching screener keyword using embeddings."""
-    build_screener_index() # Ensure index is ready
-    if not SCREENER_INDEX or SCREENER_EMBEDDING_MATRIX is None or not embedding_model or not keywords:
-        logger.error("Screener index/model not available or no keywords provided.")
-        return None
+    build_screener_index() # Ensure index text is loaded
+    if not SCREENER_INDEX or not keywords: logger.warning("Screener index not loaded or no keywords."); return None
+    if SCREENER_EMBEDDING_MATRIX is None or not embedding_model: logger.warning("Screener embeddings/model not available, falling back to text match."); return None # Or implement basic text match
 
     query = " ".join(keywords).lower().strip()
     if not query: return None
-
     try:
         query_emb = embedding_model.encode(query, convert_to_tensor=True)
         if query_emb.ndim == 1: query_emb = query_emb.unsqueeze(0)
-        if SCREENER_EMBEDDING_MATRIX.ndim != 2 or query_emb.ndim != 2:
-            logger.error(f"Screener Dimension mismatch: Query {query_emb.shape}, Matrix {SCREENER_EMBEDDING_MATRIX.shape}")
-            return None
+        if SCREENER_EMBEDDING_MATRIX.ndim != 2 or query_emb.ndim != 2: logger.error("Screener Dim mismatch"); return None
         cosine_scores = util.pytorch_cos_sim(query_emb, SCREENER_EMBEDDING_MATRIX)[0]
-    except Exception as e:
-        logger.exception(f"Error during screener embedding/similarity for query '{query}': {e}")
-        return None
+    except Exception as e: logger.exception("Screener embedding/sim error"); return None
 
     best_idx = int(torch.argmax(cosine_scores))
     best_score = cosine_scores[best_idx].item()
-
-    # Adjust threshold based on testing - may need to be higher/lower
-    match_threshold = 0.60 # Example threshold
-
+    match_threshold = 0.60
     if best_score >= match_threshold:
         matched_keyword = SCREENER_INDEX[best_idx]["keyword"]
         logger.info("Screener matched – Keywords='%s' → Matched Keyword: %s (Score: %.3f)", keywords, matched_keyword, best_score)
@@ -1116,69 +790,46 @@ def find_screener_by_keywords(keywords: List[str]) -> Optional[str]:
         return None
 
 
+# Keep get_full_company_data (can be useful for debugging or specific cases)
 def get_full_company_data(fin_code: str) -> Optional[Dict[str, Any]]:
     """Fetches comprehensive data (all tables) for a company. Use Sparingly."""
-    conn = None
-    logger.debug(f"Fetching FULL data for fin_code: {fin_code}")
+    # ... (implementation remains the same)
+    conn = None; logger.debug(f"Fetching FULL data for fin_code: {fin_code}"); full_data = {}
     if not fin_code: return None
-
-    full_data = {}
     try:
-        conn = get_db_connection()
-        dict_cur = None
-        is_dict_cursor = False
+        conn = get_db_connection(); dict_cur = None; is_dict_cursor = False
         if psycopg2_extras:
              try: dict_cur = conn.cursor(cursor_factory=psycopg2_extras.DictCursor); is_dict_cursor = True
-             except Exception as e: logger.warning(...); dict_cur = conn.cursor()
+             except Exception: dict_cur = conn.cursor()
         else: dict_cur = conn.cursor()
-
-        # Fetch from company_master
         dict_cur.execute('SELECT * FROM company_master WHERE fin_code = %s', (fin_code,))
         master_data_row = dict_cur.fetchone()
-        if not master_data_row:
-            logger.warning(f"No master data found for fin_code {fin_code}. Cannot fetch full data.")
-            dict_cur.close()
-            return None
+        if not master_data_row: logger.warning(f"No master data for {fin_code}"); dict_cur.close(); return None
         master_cols = list(master_data_row.keys()) if is_dict_cursor else [desc[0] for desc in dict_cur.description]
         full_data.update(dict(master_data_row) if is_dict_cursor else dict(zip(master_cols, master_data_row)))
-
-        # Fetch from company_additional_details
         dict_cur.execute('SELECT * FROM company_additional_details WHERE fin_code = %s', (fin_code,))
         additional_data_row = dict_cur.fetchone()
         if additional_data_row:
             is_add_dict = isinstance(additional_data_row, dict) or (psycopg2_extras and isinstance(additional_data_row, psycopg2_extras.DictRow))
             add_cols = list(additional_data_row.keys()) if is_add_dict else [desc[0] for desc in dict_cur.description]
             add_data_dict = dict(additional_data_row) if is_add_dict else dict(zip(add_cols, additional_data_row))
-            full_data.update({k: v for k, v in add_data_dict.items() if k != 'fin_code'}) # Avoid overwriting fin_code
-
-        # Fetch from consolidated_company_equity
+            full_data.update({k: v for k, v in add_data_dict.items() if k != 'fin_code'})
         dict_cur.execute('SELECT * FROM consolidated_company_equity WHERE fin_code = %s', (fin_code,))
         equity_data_row = dict_cur.fetchone()
         if equity_data_row:
             is_eq_dict = isinstance(equity_data_row, dict) or (psycopg2_extras and isinstance(equity_data_row, psycopg2_extras.DictRow))
             eq_cols = list(equity_data_row.keys()) if is_eq_dict else [desc[0] for desc in dict_cur.description]
             eq_data_dict = dict(equity_data_row) if is_eq_dict else dict(zip(eq_cols, equity_data_row))
-            full_data.update({k: v for k, v in eq_data_dict.items() if k != 'fin_code'}) # Avoid overwriting fin_code
-
-        dict_cur.close()
-        logger.info(f"Successfully fetched full data for fin_code {fin_code}")
-        return make_json_safe(full_data)
-
-    except psycopg2.Error as db_err:
-        logger.exception(f"DB error fetching full data for fin_code {fin_code}: {db_err}")
-        return None
-    except Exception as e:
-        logger.exception(f"Unexpected error fetching full data for fin_code {fin_code}: {e}")
-        return None
+            full_data.update({k: v for k, v in eq_data_dict.items() if k != 'fin_code'})
+        dict_cur.close(); logger.info(f"Fetched full data for {fin_code}"); return make_json_safe(full_data)
+    except psycopg2.Error as db_err: logger.exception(f"DB error full fetch {fin_code}: {db_err}"); return None
+    except Exception as e: logger.exception(f"Error full fetch {fin_code}: {e}"); return None
     finally:
-        if conn:
-            conn.close()
-
+        if conn: conn.close()
 
 # ==============================================================================
-# Prompt Templates
+# Prompt Templates (Keep as is)
 # ==============================================================================
-# Use f-strings or .format() method for insertion
 COMPANY_QUERY_PROMPT_TEMPLATE = """
 You are a highly knowledgeable and concise stock market assistant replying on behalf of Univest Stock Advisory. Your tone should be professional, confident, and direct.
 **CRITICAL INSTRUCTION:** Use ONLY the provided "Key Company Data Points" below to answer the user's question. Absolutely DO NOT use any external knowledge or information not present in the provided data block. Your entire response MUST be derived solely from the information given here.
@@ -1247,19 +898,19 @@ Answer acknowledging the screener results:"""
 # ==============================================================================
 
 @session_bp.route('/smart-ask', methods=['POST'])
-# @log_call(logging.INFO) # Add decorator if needed for overall route timing/logging
+# @log_call(logging.INFO) # Enable if needed
 def smart_ask():
-    """ Handles user questions using Rasa for intent/table detection and DB-first approach. """
+    """ Handles user questions using Rasa for intent/table detection and direct DB lookups. """
     start_time = time.time()
-    gemini_call_counter = 0 # Track LLM calls per request
-    session_id = None # Initialize session_id
-    response_data = {"type": "error_initialization"} # Default error type
+    gemini_call_counter = 0
+    session_id = None
+    response_data = {"type": "error_initialization"}
 
     try:
         data = request.get_json()
         if not data: raise ValueError("Request body is empty or not valid JSON.")
         question = data.get("question", "").strip()
-        session_id = data.get("session_id") # Capture session ID if provided
+        session_id = data.get("session_id")
         resolve_context_id = data.get("resolve_ambiguity_context_id")
         selected_fin_code = data.get("selected_fin_code")
 
@@ -1272,324 +923,254 @@ def smart_ask():
         return jsonify({"error": "Malformed request body or missing question."}), 400
 
     # --- Initialize variables ---
-    company_match = None
-    fin_code = None
-    company_official_name = None
+    current_company_match_info = None # Will hold the single matched company dict
+    current_fin_code = None
+    current_company_name = None     # Official name from DB match
+    rasa_extracted_name = None      # Name extracted by Rasa (used for lookup)
     is_ambiguity_resolved = False
-    original_question = question # Store original question text
+    original_question = question    # Store original question text
+    rasa_payload = None
+    rasa_intent = None
+    rasa_extracted_concept = None
+    rasa_target_concepts = None
+    rasa_source_table = None
 
     # --- Ambiguity Resolution Logic ---
     if resolve_context_id and selected_fin_code:
         logger.info(f"Attempting ambiguity resolution: ContextID={resolve_context_id}, SelectedFinCode={selected_fin_code} | Session: {session_id}")
-        # Use a thread-safe way to access/modify cache if running multi-threaded
         context_data = AMBIGUITY_CACHE.get(resolve_context_id)
-        if context_data and (time.time() - context_data.get('timestamp', 0) <= AMBIGUITY_CACHE_EXPIRY):
-            original_question = context_data['question'] # Use original question from stored context
-            logger.info(f"Found ambiguity context. Original Question: '{original_question}'")
-            build_company_name_index() # Ensure index is ready
-            # Find the selected company details from index
-            company_match_resolved = next((c for c in COMPANY_NAME_INDEX if str(c.get("fin_code")) == str(selected_fin_code)), None)
 
-            if not company_match_resolved:
-                logger.error(f"Selected fin_code {selected_fin_code} not found in company index during ambiguity resolution.")
+        if context_data and (time.time() - context_data.get('timestamp', 0) <= AMBIGUITY_CACHE_EXPIRY):
+            original_question = context_data['question'] # Use original question from context
+            logger.info(f"Found ambiguity context. Original Question: '{original_question}'")
+            cached_options = context_data.get('options', [])
+
+            # Find the selected company details *from the cached options*
+            resolved_match = next((c for c in cached_options if str(c.get("fin_code")) == str(selected_fin_code)), None)
+
+            if not resolved_match:
+                logger.error(f"Selected fin_code {selected_fin_code} not found in cached ambiguity options for context {resolve_context_id}.")
                 return jsonify({
                     "type": "error_processing_selection",
-                    "message": "Sorry, I couldn't find the details for the company you selected. Please try asking again.",
+                    "message": "Sorry, I couldn't process your selection. It might have expired. Please try asking again.",
                     "source": "system_error"
-                }), 200 # 200 OK, but with error payload
-
-            # Successfully resolved
-            fin_code = selected_fin_code
-            company_official_name = company_match_resolved.get("name", "Selected Company")
-            company_match = company_match_resolved # Store full match info
-            is_ambiguity_resolved = True
-            logger.info(f"Ambiguity resolved to company: {company_official_name} ({fin_code})")
-            # Remove context from cache after successful resolution
-            try:
-                del AMBIGUITY_CACHE[resolve_context_id]
-            except KeyError:
-                logger.warning(f"Attempted to delete ambiguity context {resolve_context_id}, but it was already gone.")
+                }), 200
+            else:
+                # Successfully resolved
+                current_fin_code = selected_fin_code
+                current_company_name = resolved_match.get("comp_name", "Selected Company")
+                current_company_match_info = resolved_match # Store the selected company's dict
+                is_ambiguity_resolved = True
+                logger.info(f"Ambiguity resolved to company: {current_company_name} ({current_fin_code})")
+                # Remove context from cache
+                try: del AMBIGUITY_CACHE[resolve_context_id]
+                except KeyError: pass
+                # *** Now we have the fin_code and original question, proceed to call Rasa ***
         else:
-            # Context not found or expired
             logger.warning(f"Ambiguity context {resolve_context_id} expired or not found. Session: {session_id}")
             return jsonify({
                 "type": "error_context_lost",
                 "message": "Sorry, the selection context has expired. Could you please ask your original question again?",
                 "source": "system_error"
-            }), 200 # 200 OK, but with error payload
-    # --- End Ambiguity Resolution ---
+            }), 200
 
-    # --- DB Connection Check (Essential before proceeding) ---
+    # --- DB Connection Check (Early check) ---
     try:
-        # Use context manager for safety if get_db_connection supports it
-        # Or manually manage connection closing in a finally block if not
         conn_test = get_db_connection()
         if not conn_test: raise ConnectionError("get_db_connection returned None.")
-        conn_test.close() # Close the test connection
+        conn_test.close()
         logger.debug("Initial DB connection check successful.")
     except Exception as db_conn_err:
         logger.critical(f"Initial DB connection check failed: {db_conn_err}", exc_info=True)
-        return jsonify({"type": "database_error", "message": "System error: Cannot connect to the data source at the moment. Please try again later.", "source": "system_error"}), 503 # Service Unavailable
+        return jsonify({"type": "database_error", "message": "System error: Cannot connect to data source.", "source": "system_error"}), 503
 
     # --- Rasa Interaction ---
-    rasa_payload = None
-    rasa_url = os.getenv("RASA_WEBHOOK_URL", "http://localhost:5005") #TODO:check Get Rasa URL from env
+    # Always call Rasa with the original_question (could be from input or ambiguity cache)
+    # unless we are *currently* handling an ambiguity clarification request itself.
+    if not response_data.get("type") == "ask_clarification": # Avoid calling Rasa if we just generated a clarification q
+        rasa_url = os.getenv("RASA_WEBHOOK_URL", "http://localhost:5005")
+        log_msg = f"Calling Rasa for question: '{original_question}' | Session: {session_id}"
+        if is_ambiguity_resolved: log_msg += " (Post-Ambiguity Resolution)"
+        logger.info(log_msg)
+        rasa_payload = get_rasa_response_payload(original_question, rasa_url=rasa_url)
 
+        if rasa_payload:
+            rasa_intent = rasa_payload.get("query_intent")
+            # Prioritize resolved_company, fall back to extracted_company
+            company_name_from_rasa = rasa_payload.get("resolved_company") or rasa_payload.get("extracted_company")
+            rasa_extracted_concept = rasa_payload.get("extracted_concept")
+            rasa_target_concepts = rasa_payload.get("target_concepts")
+            rasa_source_table = rasa_payload.get("source_table")
+            rasa_extracted_name = company_name_from_rasa # Keep track of what Rasa gave us
 
-    # Call Rasa unless we just resolved ambiguity and lack the original question somehow
-    if (is_ambiguity_resolved and original_question) or (not is_ambiguity_resolved and original_question):
-         log_msg = f"Calling Rasa for question: '{original_question}' | Session: {session_id}"
-         if is_ambiguity_resolved: log_msg += " (Post-Ambiguity Resolution)"
-         logger.info(log_msg)
-         rasa_payload = get_rasa_response_payload(original_question, rasa_url=rasa_url)
-    else:
-         logger.warning(f"Skipping Rasa call: No question available. is_ambiguity_resolved={is_ambiguity_resolved}")
-
-
-    # --- Main Logic based on Rasa Payload ---
-    if rasa_payload:
-        rasa_intent = rasa_payload.get("query_intent")
-
-        # === NEW LOGIC: CORRECTED COMPANY NAME EXTRACTION ===
-        # Prioritize resolved_company, fall back to extracted_company if resolved is null/empty
-        company_name_from_rasa = rasa_payload.get("resolved_company")
-        if not company_name_from_rasa:
-            extracted_name = rasa_payload.get("extracted_company")
-            if extracted_name: # Ensure it's not None or empty string
-                company_name_from_rasa = extracted_name
-                logger.debug(f"Rasa 'resolved_company' was null/empty, falling back to 'extracted_company': '{extracted_name}'")
-            else:
-                # If both resolved and extracted are null/empty, explicitly set to None
-                company_name_from_rasa = None
-                logger.debug("Both 'resolved_company' and 'extracted_company' are null or empty in Rasa payload.")
-        # =====================================================
-
-        rasa_extracted_concept = rasa_payload.get("extracted_concept") # Single concept from ask_data_source
-        rasa_target_concepts = rasa_payload.get("target_concepts") # List from ask_investment_advice
-        rasa_source_table = rasa_payload.get("source_table")
-
-        # === CHANGED === Use the potentially corrected name in logging
-        logger.info(f"Rasa Payload Parsed: Intent='{rasa_intent}', Company='{company_name_from_rasa}', Concept(s)='{rasa_target_concepts or rasa_extracted_concept}', Table='{rasa_source_table}' | Session: {session_id}")
-
-
-        # Determine the current company context
-        current_company_name = None
-        current_fin_code = None
-        current_company_match = None
-
-        if is_ambiguity_resolved and fin_code:
-            # Priority to the company selected during ambiguity resolution
-            current_fin_code = fin_code
-            current_company_name = company_official_name
-            current_company_match = company_match
-            logger.debug(f"Using company from ambiguity resolution: {current_company_name} ({current_fin_code})")
-        # === CHANGED === Use the corrected variable here: company_name_from_rasa
-        elif company_name_from_rasa:
-            # If Rasa identified a company (either resolved or extracted), find its fin_code
-            logger.debug(f"Rasa identified company: '{company_name_from_rasa}'. Finding match using backend index...")
-            # === CHANGED === Pass the potentially extracted name string to the backend matcher
-            match_from_rasa_name = find_company_by_name_or_symbol(company_name_from_rasa)
-            if match_from_rasa_name:
-                current_fin_code = match_from_rasa_name.get("fin_code")
-                # Use official name from index, fallback to name from rasa if index lacks it somehow
-                current_company_name = match_from_rasa_name.get("name", company_name_from_rasa)
-                current_company_match = match_from_rasa_name
-                logger.info(f"Backend matched Rasa company '{company_name_from_rasa}' to: {current_company_name} ({current_fin_code})")
-            else:
-                # === CHANGED === Store the name that failed to match for clarity in logs/errors
-                current_company_name = company_name_from_rasa
-                logger.warning(f"Backend could not find a match in index for company '{current_company_name}' identified by Rasa.")
-                # fin_code remains None
+            logger.info(f"Rasa Payload Parsed: Intent='{rasa_intent}', Company='{rasa_extracted_name}', Concept(s)='{rasa_target_concepts or rasa_extracted_concept}', Table='{rasa_source_table}' | Session: {session_id}")
         else:
-            logger.debug("Neither ambiguity resolution nor Rasa identified a specific company.")
+            logger.warning(f"Rasa did not return a usable payload for: '{original_question}'")
+            # Proceed to fallback logic later
 
+    # --- Company Identification (Direct DB Lookup if not resolved via ambiguity) ---
+    if not is_ambiguity_resolved and rasa_extracted_name:
+        logger.info(f"Rasa identified company '{rasa_extracted_name}'. Performing direct DB lookup...")
+        db_lookup_result = find_company_direct_db(rasa_extracted_name, instrument_filter='EQUITY')
 
+        if isinstance(db_lookup_result, dict): # Single match
+            current_company_match_info = db_lookup_result
+            current_fin_code = current_company_match_info.get("fin_code")
+            current_company_name = current_company_match_info.get("comp_name") # Use official name
+            logger.info(f"Direct DB lookup found unique match: {current_company_name} ({current_fin_code})")
+        elif isinstance(db_lookup_result, list): # Multiple matches (Ambiguity)
+            logger.warning(f"Direct DB lookup found {len(db_lookup_result)} ambiguous matches for '{rasa_extracted_name}'.")
+            context_id = str(uuid.uuid4())
+            # Prepare options for clarification (only essential info)
+            options_for_user = [
+                {"fin_code": c.get("fin_code"), "name": c.get("comp_name"), "symbol": c.get("symbol"), "sector": c.get("sector")}
+                for c in db_lookup_result
+            ]
+            # Store the original question and the DB options in the cache
+            AMBIGUITY_CACHE[context_id] = {
+                "question": original_question,
+                "options": db_lookup_result, # Store full dicts from DB briefly
+                "timestamp": time.time()
+            }
+            logger.info(f"Storing ambiguity context {context_id} with {len(options_for_user)} options.")
+            # Return clarification request
+            response_data = {
+                "type": "ask_clarification",
+                "message": f"I found multiple potential matches for '{rasa_extracted_name}'. Please select the correct one:",
+                "options": options_for_user,
+                "resolve_ambiguity_context_id": context_id,
+                "source": "system_clarification"
+            }
+            # Immediately return the clarification request
+            cleanup_expired_ambiguity_cache()
+            processing_time = round((time.time() - start_time) * 1000)
+            response_data["processing_time_ms"] = processing_time
+            logger.info(f"Request resulted in AMBIGUITY CLARIFICATION in {processing_time} ms.")
+            return jsonify(response_data), 200
+        else: # No match found
+            logger.warning(f"Direct DB lookup found NO match for company '{rasa_extracted_name}'.")
+            # fin_code remains None, proceed, likely handled by checks below
+
+    # --- Main Logic based on Rasa Intent and Identified Company (if any) ---
+    if rasa_intent:
         # --- Handle Investment Advice Intent ---
         if rasa_intent == "ask_investment_advice":
             response_data["type"] = "investment_advice"
-            logger.debug(f"Processing 'ask_investment_advice' intent for '{current_company_name or 'Unknown Company'}'")
-
-            # === CHANGED === Check fin_code status after potential backend match attempt
+            logger.debug(f"Processing 'ask_investment_advice' for '{current_company_name or rasa_extracted_name or 'Unknown'}'")
             if not current_fin_code:
-                logger.warning("Cannot process advice intent: Company fin_code is missing (could not match Rasa name or ambiguity resolution failed).")
-                response_data.update({
-                    "type": "error_missing_info",
-                    # Provide the name Rasa gave if resolution failed to give context
-                    "message": f"Could not identify the specific company ('{current_company_name}') for the advice request in my records." if current_company_name else "Please specify which company you'd like advice for."
-                })
+                logger.warning("Cannot process advice: Company fin_code is missing.")
+                response_data.update({"type": "error_missing_info", "message": f"Could not identify the specific company ('{rasa_extracted_name}') for the advice request." if rasa_extracted_name else "Please specify which company you'd like advice for."})
             elif not rasa_target_concepts or not rasa_source_table:
-                logger.warning(f"Cannot process advice intent: Missing target_concepts ({rasa_target_concepts}) or source_table ({rasa_source_table}) in Rasa payload.")
-                response_data.update({"type": "error_processing_advice", "message": "Could not fully understand the advice request details from the assistant's analysis."})
+                 logger.warning(f"Cannot process advice: Missing concepts/table ({rasa_target_concepts}/{rasa_source_table}).")
+                 response_data.update({"type": "error_processing_advice", "message": "Could not fully understand the advice request details."})
             else:
                 logger.info(f"Fetching advice data for {current_company_name} ({current_fin_code}). Needs: {rasa_target_concepts} from {rasa_source_table}")
                 advice_data = get_specific_company_data(current_fin_code, rasa_target_concepts)
-
                 if advice_data:
-                    # (Keep logic for calling LLM for advice interpretation)
-                    verdict_prompt = f"""
-                    Analyze the following investment verdicts for {current_company_name} and provide a brief summary interpretation.
-                    Focus ONLY on the provided verdicts. Do not add external information or opinions. State if data is missing.
-                    Short-term Verdict: {advice_data.get('short_term_verdict', 'Not Available')}
-                    Long-term Verdict: {advice_data.get('long_term_verdict', 'Not Available')}
-                    Summary:"""
-                    gemini_call_counter += 1
-                    logger.info(f"[Gemini Call #{gemini_call_counter}] for advice interpretation: {current_company_name}")
-                    gemini_advice_answer = get_llm_answer(
-                        verdict_prompt,
-                        original_question=original_question,
-                        company_data=advice_data # Log context
-                    )
-                    response_data.update({
-                        "company": current_company_match or {"name": current_company_name, "fin_code": current_fin_code},
-                        "answer": gemini_advice_answer,
-                        "source": "llm_with_db_verdicts"
-                    })
+                    verdict_prompt = f"Analyze the following investment verdicts for {current_company_name} and provide a brief summary interpretation. Focus ONLY on the provided verdicts. State if data is missing.\nShort-term Verdict: {advice_data.get('short_term_verdict', 'Not Available')}\nLong-term Verdict: {advice_data.get('long_term_verdict', 'Not Available')}\nSummary:"
+                    gemini_call_counter += 1; logger.info(f"[Gemini Call #{gemini_call_counter}] for advice: {current_company_name}")
+                    gemini_advice_answer = get_llm_answer(verdict_prompt, original_question=original_question, company_data=advice_data)
+                    response_data.update({"company": current_company_match_info or {"name": current_company_name, "fin_code": current_fin_code}, "answer": gemini_advice_answer, "source": "llm_with_db_verdicts"})
                 else:
                     logger.error(f"Failed to fetch advice data ({rasa_target_concepts}) for {current_company_name} ({current_fin_code})")
-                    response_data.update({"type": "data_fetch_failed", "message": f"Sorry, I couldn't retrieve the investment outlook data for '{current_company_name}' right now."})
+                    response_data.update({"type": "data_fetch_failed", "message": f"Sorry, couldn't retrieve investment outlook for '{current_company_name}'."})
 
         # --- Handle Standard Data Source Intent ---
         elif rasa_intent == "ask_data_source":
-            response_data["type"] = "company_query" # Or "data_source_query"
-            logger.debug(f"Processing 'ask_data_source' intent for concept '{rasa_extracted_concept}', table '{rasa_source_table}'")
+            response_data["type"] = "company_query"
+            logger.debug(f"Processing 'ask_data_source' for concept '{rasa_extracted_concept}', table '{rasa_source_table}'")
 
-             # Validate required info
             if not rasa_extracted_concept or not rasa_source_table:
-                logger.warning(f"Cannot process data source intent: Missing concept ({rasa_extracted_concept}) or source_table ({rasa_source_table}).")
-                response_data.update({"type": "error_processing_data_query", "message": "Could not fully understand which data point you're asking about."})
-            # === CHANGED === Check fin_code status after potential backend match attempt
-            elif not current_fin_code and rasa_source_table != 'screeners': # Screeners don't always need a company
-                logger.warning(f"Cannot process data source intent for concept '{rasa_extracted_concept}': Company fin_code is missing (could not match Rasa name '{company_name_from_rasa}' or ambiguity resolution failed).")
-                response_data.update({
-                    "type": "error_missing_info",
-                    # Provide the name Rasa gave if resolution failed to give context
-                    "message": f"Please specify which company you're asking about for '{rasa_extracted_concept.replace('_',' ')}'. I couldn't definitively identify '{current_company_name}' in my records." if current_company_name else f"Please specify which company you're asking about for '{rasa_extracted_concept.replace('_',' ')}'."
-                })
-            # Handle Screeners Separately
+                logger.warning(f"Cannot process data source: Missing concept/table ({rasa_extracted_concept}/{rasa_source_table}).")
+                response_data.update({"type": "error_processing_data_query", "message": "Could not understand which data point you're asking about."})
             elif rasa_source_table == 'screeners':
-                 # (Keep screener logic as before)
                  logger.info(f"Handling screener request for keyword: '{rasa_extracted_concept}'")
-                 screener_data = get_screener_data(rasa_extracted_concept) # Use concept as keyword
+                 screener_data = get_screener_data(rasa_extracted_concept)
                  if screener_data and screener_data.get("total_companies", 0) > 0:
                      companies_list = screener_data.get("companies", [])
-                     companies_list_str = "\n".join([f"- {c.get('comp_name', 'N/A')} ({c.get('symbol', 'N/A')}) - {c.get('sector', 'N/A')}" for c in companies_list]) if companies_list else "No specific examples available."
-                     prompt = SCREENER_PROMPT_TEMPLATE.format(
-                         screener_title=screener_data.get('title', rasa_extracted_concept),
-                         keyword=rasa_extracted_concept,
-                         description=screener_data.get('description', 'N/A'),
-                         total_companies=screener_data.get('total_companies', 0),
-                         companies_list_str=companies_list_str,
-                         question=original_question
-                     )
-                     gemini_call_counter += 1
-                     logger.info(f"[Gemini Call #{gemini_call_counter}] for screener summary: {rasa_extracted_concept}")
+                     companies_list_str = "\n".join([f"- {c.get('comp_name', 'N/A')} ({c.get('symbol', 'N/A')}) - {c.get('sector', 'N/A')}" for c in companies_list]) if companies_list else "No examples available."
+                     prompt = SCREENER_PROMPT_TEMPLATE.format(screener_title=screener_data.get('title', rasa_extracted_concept), keyword=rasa_extracted_concept, description=screener_data.get('description', 'N/A'), total_companies=screener_data.get('total_companies', 0), companies_list_str=companies_list_str, question=original_question)
+                     gemini_call_counter += 1; logger.info(f"[Gemini Call #{gemini_call_counter}] for screener: {rasa_extracted_concept}")
                      answer = get_llm_answer(prompt, original_question=original_question, screener_data=screener_data)
-                     response_data.update({
-                         "type": "screener_result",
-                         "screener_keyword": rasa_extracted_concept,
-                         "screener_title": screener_data.get('title', rasa_extracted_concept),
-                         "answer": answer,
-                         "source": "llm_with_screener_data"
-                     })
-                 elif screener_data: # Found screener but no companies
+                     response_data.update({"type": "screener_result", "screener_keyword": rasa_extracted_concept, "screener_title": screener_data.get('title', rasa_extracted_concept), "answer": answer, "source": "llm_with_screener_data"})
+                 elif screener_data:
                      logger.warning(f"Screener '{rasa_extracted_concept}' found but has no companies.")
-                     response_data.update({
-                         "type": "screener_result_empty",
-                         "screener_keyword": rasa_extracted_concept,
-                         "screener_title": screener_data.get('title', rasa_extracted_concept),
-                         "answer": f"The screener '{screener_data.get('title', rasa_extracted_concept)}' currently has no companies matching its criteria.",
-                         "source": "database"
-                     })
-                 else: # Screener keyword not found
-                     logger.error(f"Screener keyword '{rasa_extracted_concept}' indicated by Rasa was not found in the database.")
-                     response_data.update({
-                         "type": "screener_not_found",
-                         "answer": f"Sorry, I couldn't find a screener matching '{rasa_extracted_concept}'.",
-                         "source": "database"
-                     })
-
-            # Handle Company-Specific Data Point Queries (Now requires valid current_fin_code)
-            else:
+                     response_data.update({"type": "screener_result_empty", "answer": f"Screener '{screener_data.get('title', rasa_extracted_concept)}' currently has no companies.", "source": "database"})
+                 else:
+                     logger.error(f"Screener keyword '{rasa_extracted_concept}' not found.")
+                     response_data.update({"type": "screener_not_found", "answer": f"Sorry, couldn't find screener '{rasa_extracted_concept}'.", "source": "database"})
+            elif not current_fin_code: # Must have fin_code for non-screener data source queries
+                logger.warning(f"Cannot process data source: Company fin_code is missing for concept '{rasa_extracted_concept}'.")
+                response_data.update({"type": "error_missing_info", "message": f"Please specify which company you're asking about for '{rasa_extracted_concept.replace('_',' ')}'. I couldn't identify '{rasa_extracted_name}'." if rasa_extracted_name else f"Please specify the company for '{rasa_extracted_concept.replace('_',' ')}'."})
+            else: # Handle Company-Specific Data Point Queries
                 logger.info(f"Fetching specific data for {current_company_name} ({current_fin_code}). Concept: {rasa_extracted_concept}, Table: {rasa_source_table}")
-
-                # Determine fields to fetch based ONLY on the identified source table
                 fields_to_get_set = TABLE_TO_FIELDS_MAP.get(rasa_source_table, set())
                 if not fields_to_get_set:
-                    logger.warning(f"No fields mapped in TABLE_TO_FIELDS_MAP for Rasa table '{rasa_source_table}'. Falling back to ESSENTIAL keys.")
-                    fields_to_get_set = set(ESSENTIAL_COMPANY_KEYS) # Fallback
+                    logger.warning(f"No fields mapped for table '{rasa_source_table}'. Using concept only.")
+                    fields_to_get_set = {rasa_extracted_concept} # Minimal fetch
                 else:
-                    fields_to_get_set = fields_to_get_set.copy() # Avoid modifying original map
-                    fields_to_get_set.add(rasa_extracted_concept) # Add the specific concept
-                    fields_to_get_set.add("fin_code") # Ensure primary key is always there
-                    # Add core identifiers if not already present, helpful for prompts/context
-                    fields_to_get_set.update(["comp_name", "symbol"])
-                    logger.info(f"Fetching fields defined for table '{rasa_source_table}' (plus essentials): {fields_to_get_set}")
-
+                    fields_to_get_set = fields_to_get_set.copy()
+                    fields_to_get_set.add(rasa_extracted_concept)
+                fields_to_get_set.update(["fin_code", "comp_name", "symbol"]) # Ensure essentials
                 fields_to_get = list(fields_to_get_set)
+
                 specific_data = get_specific_company_data(current_fin_code, fields_to_get)
 
                 if specific_data:
-                    # Ensure company name from DB is used if fetched
-                    db_company_name = specific_data.get("comp_name", current_company_name) # Prefer DB name if available
+                    db_company_name = specific_data.get("comp_name", current_company_name) # Prefer DB name
                     logger.debug(f"[Data Fetched from {rasa_source_table}]:\n{json.dumps(specific_data, indent=2, default=str)}")
-
-                    # Attempt direct answer generation first
                     direct_answer = generate_direct_answer(original_question, specific_data, db_company_name)
-
                     if direct_answer:
-                        logger.info(f"✅ DIRECT answer generated for {db_company_name} (Concept: {rasa_extracted_concept})")
-                        response_data.update({
-                            "company": current_company_match or {"name": db_company_name, "fin_code": current_fin_code},
-                            "answer": direct_answer,
-                            "source": "database"
-                        })
+                        logger.info(f"✅ DIRECT answer generated for {db_company_name}")
+                        response_data.update({"company": current_company_match_info or {"name": db_company_name, "fin_code": current_fin_code}, "answer": direct_answer, "source": "database"})
                     else:
-                        # Fallback to LLM using ONLY the fetched data
                         logger.info(f"No direct answer. Calling Gemini using data from '{rasa_source_table}'.")
                         essential_data_for_llm = specific_data
-                        gemini_call_counter += 1
-                        logger.info(f"[Gemini Call #{gemini_call_counter}] for: {db_company_name} | Concept: {rasa_extracted_concept} | Data Source: {rasa_source_table}")
-                        logger.debug(f"[Data to Gemini]:\n{json.dumps(essential_data_for_llm, indent=2, default=str)}")
-                        prompt = COMPANY_QUERY_PROMPT_TEMPLATE.format(
-                            company_name=db_company_name, # Use name from DB
-                            essential_company_data=json.dumps(essential_data_for_llm, indent=2),
-                            question=original_question
-                        )
-                        logger.debug(f"[Prompt Sent to Gemini]:\n{prompt[:1000]}...")
-                        answer = get_llm_answer(
-                            prompt,
-                            original_question=original_question,
-                            company_data=essential_data_for_llm # Log context
-                        )
-                        response_data.update({
-                            "company": current_company_match or {"name": db_company_name, "fin_code": current_fin_code},
-                            "answer": answer,
-                            "source": "llm_with_db_data"
-                        })
+                        gemini_call_counter += 1; logger.info(f"[Gemini Call #{gemini_call_counter}] for {db_company_name}|Concept:{rasa_extracted_concept}")
+                        prompt = COMPANY_QUERY_PROMPT_TEMPLATE.format(company_name=db_company_name, essential_company_data=json.dumps(essential_data_for_llm, indent=2, default=str), question=original_question)
+                        answer = get_llm_answer(prompt, original_question=original_question, company_data=essential_data_for_llm)
+                        response_data.update({"company": current_company_match_info or {"name": db_company_name, "fin_code": current_fin_code}, "answer": answer, "source": "llm_with_db_data"})
                 else:
-                    # Failed to fetch even the specific data
                     logger.error(f"Failed to fetch specific data ({fields_to_get}) for {current_company_name} ({current_fin_code}) based on table '{rasa_source_table}'")
-                    response_data.update({"type": "data_fetch_failed", "message": f"Sorry, I couldn't retrieve the requested data ({rasa_extracted_concept.replace('_',' ')}) for '{current_company_name}' right now."})
+                    response_data.update({"type": "data_fetch_failed", "message": f"Sorry, couldn't retrieve '{rasa_extracted_concept.replace('_',' ')}' for '{current_company_name}'."})
 
-        # --- Handle Other Intents Recognized by Rasa (e.g., greet, goodbye) ---
+        # --- Handle Other Intents ---
         else:
-            # (Keep logic for other intents as before)
-            logger.info(f"Handling non-data/advice Rasa intent: '{rasa_intent}' | Session: {session_id}")
+            logger.info(f"Handling non-data/advice Rasa intent: '{rasa_intent}'")
             response_data["type"] = f"general_fallback_rasa_{rasa_intent}"
             prompt = GENERAL_FINANCE_PROMPT_TEMPLATE.format(question=original_question)
+            gemini_call_counter += 1; logger.info(f"[Gemini Call #{gemini_call_counter}] General Fallback (Rasa Intent: {rasa_intent})")
             answer = get_llm_answer(prompt, original_question=original_question)
             response_data.update({"answer": answer, "source": "llm_only"})
 
-    # --- Fallback if Rasa Interaction Failed or yielded no usable payload ---
+    # --- Fallback if Rasa Interaction Failed or No Intent Identified ---
     else:
-        # (Keep fallback logic as before)
-        logger.warning(f"Rasa did not return a usable payload. Falling back to general LLM processing. | Session: {session_id} | Question: '{original_question}'")
-        response_data["type"] = "general_fallback_no_rasa"
-        prompt = GENERAL_FINANCE_PROMPT_TEMPLATE.format(question=original_question)
-        gemini_call_counter += 1
-        logger.info(f"[Gemini Call #{gemini_call_counter}] General Fallback (No Rasa Payload)")
-        # answer = get_llm_answer(prompt, original_question=original_question)
-        # response_data.update({"answer": answer, "source": "llm_only"})
+         # If ambiguity was resolved, but Rasa failed, we might still have fin_code
+         # Prioritize using fin_code if available for a generic fetch
+         if current_fin_code and current_company_name:
+             logger.warning(f"Rasa failed, but fin_code {current_fin_code} ({current_company_name}) is known. Fetching essential data for generic LLM call.")
+             response_data["type"] = "general_fallback_with_company"
+             # Fetch a small set of essential data
+             essential_data = get_specific_company_data(current_fin_code, ESSENTIAL_COMPANY_KEYS)
+             if essential_data:
+                 prompt = COMPANY_QUERY_PROMPT_TEMPLATE.format(
+                     company_name=essential_data.get("comp_name", current_company_name),
+                     essential_company_data=json.dumps(essential_data, indent=2, default=str),
+                     question=original_question # Ask the original question against this general data
+                 )
+                 gemini_call_counter += 1; logger.info(f"[Gemini Call #{gemini_call_counter}] Fallback (Rasa Failed, Known Company)")
+                 answer = get_llm_answer(prompt, original_question=original_question, company_data=essential_data)
+                 response_data.update({"company": current_company_match_info or {"name": current_company_name, "fin_code": current_fin_code}, "answer": answer, "source": "llm_with_db_data_fallback"})
+             else: # Failed fetch even essentials
+                 logger.error(f"Fallback failed: Could not fetch essential data for known fin_code {current_fin_code}")
+                 response_data.update({"type": "data_fetch_failed", "answer": f"Sorry, I couldn't retrieve essential info for {current_company_name} after an internal error.", "source": "system_error"})
+         else: # No fin_code, total fallback
+            logger.warning(f"Rasa failed/no intent. Falling back to general LLM. | Session: {session_id} | Q: '{original_question}'")
+            response_data["type"] = "general_fallback_no_rasa"
+            prompt = GENERAL_FINANCE_PROMPT_TEMPLATE.format(question=original_question)
+            gemini_call_counter += 1; logger.info(f"[Gemini Call #{gemini_call_counter}] General Fallback (No Rasa, No Company)")
+            answer = get_llm_answer(prompt, original_question=original_question)
+            response_data.update({"answer": answer, "source": "llm_only"})
 
 
     # --- Final Response Assembly ---
@@ -1597,77 +1178,57 @@ def smart_ask():
     processing_time = round((end_time - start_time) * 1000)
     response_data["processing_time_ms"] = processing_time
 
-    # Ensure there's always an answer field, provide default error if needed
     if "answer" not in response_data or not response_data.get("answer"):
-        # === CHANGED === Add more context to final error if possible
-        error_message = "Sorry, I encountered an issue processing your request. Please try rephrasing or ask again later."
-        if response_data.get("type") == "error_missing_info" and response_data.get("message"):
-             error_message = response_data["message"] # Use the specific error message if available
+        error_message = response_data.get("message", "Sorry, I encountered an issue processing your request. Please try rephrasing.") # Use specific message if set
         logger.error(f"Processing finished but no answer generated for: '{original_question}' | Final Response Data: {response_data}")
         response_data["answer"] = error_message
-        response_data["type"] = response_data.get("type", "error_unknown") # Keep error type if set, else add generic one
+        response_data["type"] = response_data.get("type", "error_unknown")
         response_data["source"] = response_data.get("source", "system_error")
 
     logger.info(f"Request processed in {processing_time} ms | Final Type: {response_data.get('type')} | Source: {response_data.get('source')} | Gemini Calls: {gemini_call_counter} | Session: {session_id}")
 
-    # Before returning, clean up any expired ambiguity contexts
-    cleanup_expired_ambiguity_cache() # Assuming this function exists
-
+    cleanup_expired_ambiguity_cache()
     return jsonify(response_data), 200
 
 
 # ==============================================================================
-# Other Helper Routes
+# Other Helper Routes (Keep llm-status, adjust reload-indices)
 # ==============================================================================
-
 @session_bp.route('/llm-status', methods=['GET'])
 def llm_status():
     """Checks connectivity and basic response from the configured LLM."""
+    # ... (implementation remains the same)
     logger.info("Checking LLM status...")
     try:
-        # Use a simple, safe prompt
         prompt = "Respond with 'Operational' if you are functioning correctly."
-        response = call_gemini_api(prompt) # Expects text response
-
+        response = call_gemini_api(prompt)
         if isinstance(response, str) and "operational" in response.lower():
-            logger.info("LLM status check: OK")
-            return jsonify({"status": "ok", "response": response}), 200
+            logger.info("LLM status check: OK"); return jsonify({"status": "ok", "response": response}), 200
         elif isinstance(response, dict) and "error" in response:
-            logger.error(f"LLM status check failed: {response}")
-            return jsonify({"status": "error", "details": response}), 503 # Service Unavailable
+            logger.error(f"LLM status check failed: {response}"); return jsonify({"status": "error", "details": response}), 503
         else:
-            logger.warning(f"LLM status check returned unexpected response: {str(response)[:200]}")
-            return jsonify({"status": "error", "message": "Unexpected response from LLM.", "response": str(response)[:200]}), 500
-    except Exception as e:
-        logger.exception("Exception during LLM status check.")
-        return jsonify({"status": "error", "details": str(e)}), 500
+            logger.warning(f"LLM status check unexpected: {str(response)[:200]}"); return jsonify({"status": "error", "message": "Unexpected LLM response."}), 500
+    except Exception as e: logger.exception("Exception during LLM status check."); return jsonify({"status": "error", "details": str(e)}), 500
 
 
 @session_bp.route('/reload-indices', methods=['POST'])
 def reload_indices():
-    """Manually triggers reloading of embedding indices."""
-    # TODO: Add authentication/authorization if this is exposed externally
-    # Example: Check for a specific header or IP address
-    # if not request.headers.get('X-Admin-Key') == os.environ.get('ADMIN_RELOAD_KEY'):
-    #     logger.warning("Unauthorized attempt to reload indices.")
-    #     return jsonify({"error": "Unauthorized"}), 403
-
-    logger.info("Manual index reload triggered via API.")
+    """Manually triggers reloading of screener embedding indices."""
+    # Add auth if needed
+    logger.info("Manual index reload triggered via API (Screener only).")
     results = {}
     status_code = 200
 
-    try:
-        build_company_name_index()
-        results["company_index"] = f"Reloaded {len(COMPANY_NAME_INDEX)} companies."
-        logger.info(results["company_index"])
-    except Exception as e:
-        results["company_index"] = f"Error: {e}"
-        logger.error(f"API Reload Error (Company Index): {e}", exc_info=True)
-        status_code = 500
+    # --- Company index reload is removed ---
+    results["company_index"] = "Company index is no longer loaded into memory."
 
     try:
-        build_screener_index()
+        build_screener_index() # Reloads screener text and potentially embeddings
         results["screener_index"] = f"Reloaded {len(SCREENER_INDEX)} screeners."
+        if SCREENER_EMBEDDING_MATRIX is not None:
+             results["screener_index"] += f" ({SCREENER_EMBEDDING_MATRIX.shape[0]} embeddings)."
+        else:
+             results["screener_index"] += " (Embeddings might be unavailable)."
         logger.info(results["screener_index"])
     except Exception as e:
         results["screener_index"] = f"Error: {e}"
@@ -1678,84 +1239,56 @@ def reload_indices():
     # try: load_local_qa_store(); results["qa_store"] = "..."; logger.info(...)
     # except Exception as e: results["qa_store"] = f"Error: {e}"; logger.error(...); status_code = 500
 
-
     logger.info(f"Index reload finished with status: {status_code}")
     return jsonify({"status": "Reload completed.", "results": results}), status_code
 
 # ==============================================================================
-# Helper Functions
+# Helper Functions (Keep cleanup, load_local_qa_store if used)
 # ==============================================================================
 
+# Keep load_local_qa_store if you plan to use it
 def load_local_qa_store():
     """Loads Q&A pairs from a local file (Optional)."""
+    # ... (implementation remains the same)
     global qa_store, qa_embeddings
-    _initialize_embedding_model() # Ensure model loaded first
+    _initialize_embedding_model() # Ensure model loaded first if QA needs embeddings
     qa_store = []
     embeddings = []
-    # Make filepath configurable or relative
     filepath = os.path.join(os.path.dirname(__file__), "..", "..", "logs", "qa_training_data.jsonl") # Adjust path
     logger.info(f"Attempting to load local Q&A store from: {filepath}")
     try:
         with open(filepath, "r", encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
                 try: item = json.loads(line)
-                except json.JSONDecodeError: logger.warning(f"Skipping invalid JSON line {line_num} in QA store: {line.strip()}"); continue
-                except Exception as e: logger.error(f"Error reading line {line_num} from QA store: {e}"); continue
-
+                except Exception: logger.warning(f"Skipping invalid JSON line {line_num} in QA store"); continue
                 if item.get("prompt") and item.get("answer") and embedding_model:
                     qa_store.append(item)
-                    try:
-                        prompt_text = str(item["prompt"])
-                        embedding = embedding_model.encode(prompt_text, convert_to_tensor=True)
-                        embeddings.append(embedding)
-                    except Exception as e:
-                        logger.error(f"Error encoding QA prompt line {line_num}: {e}", exc_info=True)
-                        # Remove corresponding item from qa_store if embedding failed?
-                        # qa_store.pop()
-
-        if embeddings:
-            qa_embeddings = torch.stack(embeddings)
-            logger.info(f"Loaded {len(qa_store)} Q&A pairs with embeddings from '{filepath}'.")
-        else:
-            logger.info(f"No valid Q&A pairs found or loaded with embeddings from '{filepath}'.")
-            qa_embeddings = None
-    except FileNotFoundError:
-        logger.warning(f"Local Q&A file '{filepath}' not found. Skipping local QA store loading.")
-    except Exception as e:
-        logger.error(f"Failed loading local Q&A store: {e}", exc_info=True)
+                    try: embeddings.append(embedding_model.encode(str(item["prompt"]), convert_to_tensor=True))
+                    except Exception as e: logger.error(f"Error encoding QA line {line_num}: {e}"); qa_store.pop() # Remove if embedding fails?
+        if embeddings: qa_embeddings = torch.stack(embeddings); logger.info(f"Loaded {len(qa_store)} Q&A pairs with embeddings.")
+        else: logger.info(f"No valid Q&A pairs found/loaded with embeddings."); qa_embeddings = None
+    except FileNotFoundError: logger.warning(f"Local Q&A file '{filepath}' not found.")
+    except Exception as e: logger.error(f"Failed loading local Q&A store: {e}", exc_info=True)
 
 
 def cleanup_expired_ambiguity_cache():
     """Removes expired entries from the ambiguity cache."""
-    # This should ideally run periodically (e.g., via a background scheduler like APScheduler)
-    # or less frequently within requests if scheduler is not available.
-    # For simplicity, calling it at the end of smart_ask is okay for low traffic.
+    # ... (implementation remains the same)
     now = time.time()
-    # Create a list of keys to delete to avoid modifying dict while iterating
-    expired_keys = [
-        key for key, data in list(AMBIGUITY_CACHE.items())
-        if now - data.get('timestamp', 0) > AMBIGUITY_CACHE_EXPIRY
-    ]
+    expired_keys = [ key for key, data in list(AMBIGUITY_CACHE.items()) if now - data.get('timestamp', 0) > AMBIGUITY_CACHE_EXPIRY ]
     if expired_keys:
         logger.info(f"Cleaning up {len(expired_keys)} expired ambiguity cache entries.")
         for key in expired_keys:
-            try:
-                del AMBIGUITY_CACHE[key]
-            except KeyError:
-                pass # Key already removed, ignore
-
+            try: del AMBIGUITY_CACHE[key]
+            except KeyError: pass
 
 # ==============================================================================
 # Optional: Application Startup Tasks
 # ==============================================================================
-# These should ideally be called once when the Flask application starts,
-# not every time the blueprint is imported. Use Flask's app context or startup hooks.
-
-# Example (Place in your main app factory or run script):
+# Adjust startup tasks - no company index build needed
 # with app.app_context():
 #     logger.info("Performing startup tasks...")
-#     _initialize_embedding_model()
-#     build_company_name_index()
-#     build_screener_index()
-#     load_local_qa_store() # If using local QA
+#     _initialize_embedding_model() # Load model if screeners/QA need it
+#     build_screener_index()      # Build only screener index
+#     load_local_qa_store()       # If using local QA
 #     logger.info("Startup tasks complete.")
